@@ -43,9 +43,12 @@ private:
    double         m_buyPivotPrice;
    double         m_sellPivotPrice;
    
-   // --- YANGI: Partial Close holatini kuzatish uchun flaglar ---
+   // Partial Close va BE holatini kuzatish uchun flaglar
    bool           m_buyPartialClosed;
    bool           m_sellPartialClosed;
+   
+   // --- YANGI: Performance Optimization ---
+   ulong          m_lastManageTime; // Oxirgi tekshiruv vaqti
 
    double         NormalizePrice(double price);
    double         CalculateSL(ENUM_ORDER_TYPE type, double entryPrice, FiboStructure &fibo);
@@ -53,8 +56,6 @@ private:
    bool           OpenPosition(ENUM_ORDER_TYPE type, double entry, double sl, double tp, 
                               string comment, double lot);
    bool           HasOpenOrders(long signalID, bool isBuy, int entryNum);
-   
-   // --- YANGI: Lot hajmini tekshirish va to'g'irlash funksiyasi ---
    double         NormalizeVolume(double volume);
 
 public:
@@ -69,10 +70,11 @@ public:
    void           CheckMartingaleEntry2Sell(FiboStructure &originalFibo);
    void           CheckMartingaleEntry3Sell(FiboStructure &originalFibo);
    void           UpdateTPAfterMartingale(bool isBuy, long signalID, double newPivot, double newEntry, FiboStructure &originalFibo);
-   void           ManagePositions();
-   void           CheckAndSetBreakEven(bool isBuy, long signalID, double entryPrice);
    
-   // --- YANGI: 50% foydada yarmini yopish va BE ga o'tish funksiyasi ---
+   // Asosiy boshqaruv funksiyasi
+   void           ManagePositions();
+   
+   void           CheckAndSetBreakEven(bool isBuy, long signalID, double entryPrice);
    void           CheckPartialCloseAndBE(bool isBuy, long signalID);
 };
 
@@ -85,9 +87,11 @@ CTradeManager::CTradeManager()
    m_buyPivotPrice = 0;
    m_sellPivotPrice = 0;
    
-   // Flaglarni initsializatsiya qilish
    m_buyPartialClosed = false;
    m_sellPartialClosed = false;
+   
+   // --- YANGI: Vaqtni 0 ga tenglash ---
+   m_lastManageTime = 0;
 }
 
 CTradeManager::~CTradeManager()
@@ -123,7 +127,6 @@ double CTradeManager::NormalizePrice(double price)
    return NormalizeDouble(MathRound(price / tickSize) * tickSize, (int)SymbolInfoInteger(m_symbol, SYMBOL_DIGITS));
 }
 
-// Volume ni broker talablariga moslash
 double CTradeManager::NormalizeVolume(double volume)
 {
    double minLot = SymbolInfoDouble(m_symbol, SYMBOL_VOLUME_MIN);
@@ -223,9 +226,7 @@ bool CTradeManager::ExecuteBuySetup(FiboStructure &fibo)
    m_currentBuySignalID = TimeCurrent();
    m_currentBuyEntry = 1;
    m_buyPivotPrice = fibo.level0;
-   
-   // --- YANGI: Yangi signal boshlanganda flagni reset qilamiz ---
-   m_buyPartialClosed = false;
+   m_buyPartialClosed = false; // Reset flag
    
    Print("BUY Signal: ", m_currentBuySignalID);
    
@@ -262,9 +263,7 @@ bool CTradeManager::ExecuteSellSetup(FiboStructure &fibo)
    m_currentSellSignalID = TimeCurrent();
    m_currentSellEntry = 1;
    m_sellPivotPrice = fibo.level0;
-   
-   // --- YANGI: Yangi signal boshlanganda flagni reset qilamiz ---
-   m_sellPartialClosed = false;
+   m_sellPartialClosed = false; // Reset flag
    
    Print("SELL Signal: ", m_currentSellSignalID);
    
@@ -293,48 +292,176 @@ bool CTradeManager::ExecuteSellSetup(FiboStructure &fibo)
    return success;
 }
 
-// ... (Martingale funksiyalari o'zgarishsiz qoladi - qisqartirildi) ...
 void CTradeManager::CheckMartingaleEntry2Buy(FiboStructure &originalFibo)
 {
    if(!m_settings.useMartingale || !originalFibo.entry2.show) return;
    if(m_currentBuyEntry != 1 || m_currentBuySignalID == 0) return;
+   
    if(!HasOpenOrders(m_currentBuySignalID, true, 1)) {
       m_currentBuyEntry = 0; m_currentBuySignalID = 0; return;
    }
+   
    double currentPrice = SymbolInfoDouble(m_symbol, SYMBOL_ASK);
    if(currentPrice > originalFibo.entry2.price) return;
    
-   // ... (Asosiy logika o'zgarishsiz) ...
-   // Martingale order ochish logikasi shu yerda davom etadi
-   // Faqat kod hajmini kamaytirish uchun bu yerni qisqartirib yozdim, 
-   // siz o'zingizdagi eski kodni ishlataverasiz.
+   double sl = CalculateSL(ORDER_TYPE_BUY, originalFibo.entry2.price, originalFibo);
+   double lot = m_settings.lotSize * 2;
    
-   // MUHIM: Martingale ishga tushsa, Partial Close flagini qayta ko'rib chiqish kerak bo'lishi mumkin,
-   // lekin hozircha oddiy stsenariyda qoldiramiz.
+   bool success = false;
+   if(originalFibo.tp1.show)
+   {
+      double tp1 = CalculateTP(ORDER_TYPE_BUY, originalFibo.entry2.price, originalFibo.tp1.price, 1);
+      string comment = "SF-BUY-" + IntegerToString(m_currentBuySignalID) + "-E2-TP1";
+      if(OpenPosition(ORDER_TYPE_BUY, originalFibo.entry2.price, sl, tp1, comment, lot)) success = true;
+   }
+   if(originalFibo.tp2.show)
+   {
+      double tp2 = CalculateTP(ORDER_TYPE_BUY, originalFibo.entry2.price, originalFibo.tp2.price, 2);
+      string comment = "SF-BUY-" + IntegerToString(m_currentBuySignalID) + "-E2-TP2";
+      if(OpenPosition(ORDER_TYPE_BUY, originalFibo.entry2.price, sl, tp2, comment, lot)) success = true;
+   }
+   
+   if(success)
+   {
+      m_currentBuyEntry = 2;
+      UpdateTPAfterMartingale(true, m_currentBuySignalID, m_buyPivotPrice, originalFibo.entry2.price, originalFibo);
+   }
 }
 
-// ... (Boshqa martingale funksiyalar ham o'zgarishsiz) ...
-void CTradeManager::CheckMartingaleEntry3Buy(FiboStructure &originalFibo) { /* ... */ }
-void CTradeManager::CheckMartingaleEntry2Sell(FiboStructure &originalFibo) { /* ... */ }
-void CTradeManager::CheckMartingaleEntry3Sell(FiboStructure &originalFibo) { /* ... */ }
-void CTradeManager::UpdateTPAfterMartingale(bool isBuy, long signalID, double newPivot, double newEntry, FiboStructure &originalFibo) { /* ... */ }
-
-
-void CTradeManager::ManagePositions()
+void CTradeManager::CheckMartingaleEntry3Buy(FiboStructure &originalFibo)
 {
-   // --- BUY LOGIC ---
-   if(m_currentBuySignalID != 0)
+   if(!m_settings.useMartingale || !originalFibo.entry3.show) return;
+   if(m_currentBuyEntry != 2 || m_currentBuySignalID == 0) return;
+   
+   if(!HasOpenOrders(m_currentBuySignalID, true, 2)) return;
+   
+   double currentPrice = SymbolInfoDouble(m_symbol, SYMBOL_ASK);
+   if(currentPrice > originalFibo.entry3.price) return;
+   
+   double sl = CalculateSL(ORDER_TYPE_BUY, originalFibo.entry3.price, originalFibo);
+   double lot = m_settings.lotSize * 4;
+   
+   bool success = false;
+   if(originalFibo.tp1.show)
    {
-      // 1. Yangi qo'shilgan: 50% foydada qisman yopish va BE
-      CheckPartialCloseAndBE(true, m_currentBuySignalID);
+      double tp1 = CalculateTP(ORDER_TYPE_BUY, originalFibo.entry3.price, originalFibo.tp1.price, 1);
+      string comment = "SF-BUY-" + IntegerToString(m_currentBuySignalID) + "-E3-TP1";
+      if(OpenPosition(ORDER_TYPE_BUY, originalFibo.entry3.price, sl, tp1, comment, lot)) success = true;
+   }
+   if(originalFibo.tp2.show)
+   {
+      double tp2 = CalculateTP(ORDER_TYPE_BUY, originalFibo.entry3.price, originalFibo.tp2.price, 2);
+      string comment = "SF-BUY-" + IntegerToString(m_currentBuySignalID) + "-E3-TP2";
+      if(OpenPosition(ORDER_TYPE_BUY, originalFibo.entry3.price, sl, tp2, comment, lot)) success = true;
+   }
+   
+   if(success)
+   {
+      m_currentBuyEntry = 3;
+      UpdateTPAfterMartingale(true, m_currentBuySignalID, m_buyPivotPrice, originalFibo.entry3.price, originalFibo);
+   }
+}
+
+void CTradeManager::CheckMartingaleEntry2Sell(FiboStructure &originalFibo)
+{
+   if(!m_settings.useMartingale || !originalFibo.entry2.show) return;
+   if(m_currentSellEntry != 1 || m_currentSellSignalID == 0) return;
+   
+   if(!HasOpenOrders(m_currentSellSignalID, false, 1)) {
+      m_currentSellEntry = 0; m_currentSellSignalID = 0; return;
+   }
+   
+   double currentPrice = SymbolInfoDouble(m_symbol, SYMBOL_BID);
+   if(currentPrice < originalFibo.entry2.price) return;
+   
+   double sl = CalculateSL(ORDER_TYPE_SELL, originalFibo.entry2.price, originalFibo);
+   double lot = m_settings.lotSize * 2;
+   
+   bool success = false;
+   if(originalFibo.tp1.show)
+   {
+      double tp1 = CalculateTP(ORDER_TYPE_SELL, originalFibo.entry2.price, originalFibo.tp1.price, 1);
+      string comment = "SF-SELL-" + IntegerToString(m_currentSellSignalID) + "-E2-TP1";
+      if(OpenPosition(ORDER_TYPE_SELL, originalFibo.entry2.price, sl, tp1, comment, lot)) success = true;
+   }
+   if(originalFibo.tp2.show)
+   {
+      double tp2 = CalculateTP(ORDER_TYPE_SELL, originalFibo.entry2.price, originalFibo.tp2.price, 2);
+      string comment = "SF-SELL-" + IntegerToString(m_currentSellSignalID) + "-E2-TP2";
+      if(OpenPosition(ORDER_TYPE_SELL, originalFibo.entry2.price, sl, tp2, comment, lot)) success = true;
+   }
+   
+   if(success)
+   {
+      m_currentSellEntry = 2;
+      UpdateTPAfterMartingale(false, m_currentSellSignalID, m_sellPivotPrice, originalFibo.entry2.price, originalFibo);
+   }
+}
+
+void CTradeManager::CheckMartingaleEntry3Sell(FiboStructure &originalFibo)
+{
+   if(!m_settings.useMartingale || !originalFibo.entry3.show) return;
+   if(m_currentSellEntry != 2 || m_currentSellSignalID == 0) return;
+   
+   if(!HasOpenOrders(m_currentSellSignalID, false, 2)) return;
+   
+   double currentPrice = SymbolInfoDouble(m_symbol, SYMBOL_BID);
+   if(currentPrice < originalFibo.entry3.price) return;
+   
+   double sl = CalculateSL(ORDER_TYPE_SELL, originalFibo.entry3.price, originalFibo);
+   double lot = m_settings.lotSize * 4;
+   
+   bool success = false;
+   if(originalFibo.tp1.show)
+   {
+      double tp1 = CalculateTP(ORDER_TYPE_SELL, originalFibo.entry3.price, originalFibo.tp1.price, 1);
+      string comment = "SF-SELL-" + IntegerToString(m_currentSellSignalID) + "-E3-TP1";
+      if(OpenPosition(ORDER_TYPE_SELL, originalFibo.entry3.price, sl, tp1, comment, lot)) success = true;
+   }
+   if(originalFibo.tp2.show)
+   {
+      double tp2 = CalculateTP(ORDER_TYPE_SELL, originalFibo.entry3.price, originalFibo.tp2.price, 2);
+      string comment = "SF-SELL-" + IntegerToString(m_currentSellSignalID) + "-E3-TP2";
+      if(OpenPosition(ORDER_TYPE_SELL, originalFibo.entry3.price, sl, tp2, comment, lot)) success = true;
+   }
+   
+   if(success)
+   {
+      m_currentSellEntry = 3;
+      UpdateTPAfterMartingale(false, m_currentSellSignalID, m_sellPivotPrice, originalFibo.entry3.price, originalFibo);
+   }
+}
+
+void CTradeManager::UpdateTPAfterMartingale(bool isBuy, long signalID, double newPivot, double newEntry, FiboStructure &originalFibo)
+{
+   string searchPattern = "SF-" + (isBuy ? "BUY" : "SELL") + "-" + IntegerToString(signalID);
+   int total = PositionsTotal();
+   
+   double avgEntry = 0;
+   double totalLot = 0;
+   
+   for(int i = 0; i < total; i++)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetString(POSITION_SYMBOL) != m_symbol) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != m_settings.magic) continue;
+      if(StringFind(PositionGetString(POSITION_COMMENT), searchPattern) != -1)
+      {
+         avgEntry += PositionGetDouble(POSITION_PRICE_OPEN) * PositionGetDouble(POSITION_VOLUME);
+         totalLot += PositionGetDouble(POSITION_VOLUME);
+      }
+   }
+   
+   if(totalLot > 0)
+   {
+      avgEntry /= totalLot;
       
-      // 2. Eski BE logic (agar kerak bo'lsa qoladi, lekin yangisi buni qoplab ketadi)
-      string searchPattern = "SF-BUY-" + IntegerToString(m_currentBuySignalID);
-      bool signalHasOrders = false;
-      bool tp1Closed = true;
-      double entryPriceTP2 = 0;
-      ulong ticketTP2 = 0;
-      int total = PositionsTotal();
+      double newTP1 = 0;
+      if(isBuy) newTP1 = avgEntry + (originalFibo.tp1.price - originalFibo.entry1.price);
+      else      newTP1 = avgEntry - (originalFibo.entry1.price - originalFibo.tp1.price);
+      
+      newTP1 = NormalizePrice(newTP1);
       
       for(int i = 0; i < total; i++)
       {
@@ -342,85 +469,100 @@ void CTradeManager::ManagePositions()
          if(ticket == 0) continue;
          if(PositionGetString(POSITION_SYMBOL) != m_symbol) continue;
          if(PositionGetInteger(POSITION_MAGIC) != m_settings.magic) continue;
+         if(StringFind(PositionGetString(POSITION_COMMENT), searchPattern) != -1)
+         {
+            m_trade.PositionModify(ticket, PositionGetDouble(POSITION_SL), newTP1);
+         }
+      }
+   }
+}
+
+void CTradeManager::ManagePositions()
+{
+   // --- YANGI: PERFORMANCE OPTIMIZATION ---
+   // Har tickda PositionsTotal() ni tekshirish kompyuterni sekinlashtiradi.
+   // Shuning uchun bu funksiyani har 1000 millisekund (1 soniya) da bir marta ishlatamiz.
+   ulong now = GetTickCount64();
+   if(now - m_lastManageTime < 1000)
+      return;
+      
+   m_lastManageTime = now;
+   
+   // --- BUY LOGIC ---
+   if(m_currentBuySignalID != 0)
+   {
+      // 1. Partial Close va BE
+      CheckPartialCloseAndBE(true, m_currentBuySignalID);
+      
+      string searchPattern = "SF-BUY-" + IntegerToString(m_currentBuySignalID);
+      bool signalHasOrders = false;
+      
+      // Faqat shu Magic va Symbol ga tegishli orderlar tekshiriladi
+      int total = PositionsTotal();
+      for(int i = 0; i < total; i++)
+      {
+         ulong ticket = PositionGetTicket(i);
+         if(ticket == 0) continue;
+         if(PositionGetString(POSITION_SYMBOL) != m_symbol) continue;
+         if(PositionGetInteger(POSITION_MAGIC) != m_settings.magic) continue;
+         
          string comment = PositionGetString(POSITION_COMMENT);
          if(StringFind(comment, searchPattern) != -1)
          {
             signalHasOrders = true;
-            if(StringFind(comment, "TP1") != -1) tp1Closed = false;
-            if(StringFind(comment, "TP2") != -1)
-            {
-               entryPriceTP2 = PositionGetDouble(POSITION_PRICE_OPEN);
-               ticketTP2 = PositionGetInteger(POSITION_TICKET);
-            }
+            break; // Bitta topilsa yetarli, loopni to'xtatish mumkin
          }
       }
       
-      // Agar TP1 yopilgan bo'lsa, TP2 ni BE ga olish (eski logika, zaxira sifatida)
-      if(tp1Closed && ticketTP2 != 0 && m_settings.useBreakeven && !m_buyPartialClosed)
-         CheckAndSetBreakEven(true, m_currentBuySignalID, entryPriceTP2);
-         
       if(!signalHasOrders)
       {
          m_currentBuyEntry = 0;
          m_currentBuySignalID = 0;
-         m_buyPartialClosed = false; // Reset
+         m_buyPartialClosed = false;
       }
    }
    
    // --- SELL LOGIC ---
    if(m_currentSellSignalID != 0)
    {
-      // 1. Yangi qo'shilgan: 50% foydada qisman yopish va BE
+      // 1. Partial Close va BE
       CheckPartialCloseAndBE(false, m_currentSellSignalID);
       
       string searchPattern = "SF-SELL-" + IntegerToString(m_currentSellSignalID);
       bool signalHasOrders = false;
-      bool tp1Closed = true;
-      double entryPriceTP2 = 0;
-      ulong ticketTP2 = 0;
-      int total = PositionsTotal();
       
+      int total = PositionsTotal();
       for(int i = 0; i < total; i++)
       {
          ulong ticket = PositionGetTicket(i);
          if(ticket == 0) continue;
          if(PositionGetString(POSITION_SYMBOL) != m_symbol) continue;
          if(PositionGetInteger(POSITION_MAGIC) != m_settings.magic) continue;
+         
          string comment = PositionGetString(POSITION_COMMENT);
          if(StringFind(comment, searchPattern) != -1)
          {
             signalHasOrders = true;
-            if(StringFind(comment, "TP1") != -1) tp1Closed = false;
-            if(StringFind(comment, "TP2") != -1)
-            {
-               entryPriceTP2 = PositionGetDouble(POSITION_PRICE_OPEN);
-               ticketTP2 = PositionGetInteger(POSITION_TICKET);
-            }
+            break;
          }
       }
       
-      if(tp1Closed && ticketTP2 != 0 && m_settings.useBreakeven && !m_sellPartialClosed)
-         CheckAndSetBreakEven(false, m_currentSellSignalID, entryPriceTP2);
-         
       if(!signalHasOrders)
       {
          m_currentSellEntry = 0;
          m_currentSellSignalID = 0;
-         m_sellPartialClosed = false; // Reset
+         m_sellPartialClosed = false;
       }
    }
 }
 
-// --- YANGI FUNKSIYA: Partial Close va Instant BE ---
 void CTradeManager::CheckPartialCloseAndBE(bool isBuy, long signalID)
 {
-   // Agar allaqachon bajarilgan bo'lsa yoki funksiya o'chirilgan bo'lsa, chiqib ketamiz
    if((isBuy && m_buyPartialClosed) || (!isBuy && m_sellPartialClosed))
       return;
       
    string searchPattern = (isBuy ? "SF-BUY-" : "SF-SELL-") + IntegerToString(signalID);
    
-   // 1-qadam: TP1 darajasini aniqlash (Target Price)
    double tp1Level = 0;
    double entryPrice = 0;
    bool tp1Found = false;
@@ -434,32 +576,20 @@ void CTradeManager::CheckPartialCloseAndBE(bool isBuy, long signalID)
       if(PositionGetInteger(POSITION_MAGIC) != m_settings.magic) continue;
       
       string comment = PositionGetString(POSITION_COMMENT);
-      if(StringFind(comment, searchPattern) != -1)
+      if(StringFind(comment, searchPattern) != -1 && StringFind(comment, "TP1") != -1)
       {
-         // TP1 pozitsiyasini qidiramiz, chunki TP darajasi o'shanda aniq
-         if(StringFind(comment, "TP1") != -1)
-         {
-            tp1Level = PositionGetDouble(POSITION_TP);
-            entryPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-            tp1Found = true;
-            break;
-         }
+         tp1Level = PositionGetDouble(POSITION_TP);
+         entryPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+         tp1Found = true;
+         break;
       }
    }
    
-   // Agar TP1 pozitsiyasi topilmasa (yopilgan bo'lsa), bu funksiya ishlamaydi
    if(!tp1Found) return;
    
-   // 2-qadam: 50% masofani hisoblash
    double distanceToTP1 = MathAbs(tp1Level - entryPrice);
-   double triggerPrice = 0;
+   double triggerPrice = (isBuy) ? entryPrice + (distanceToTP1 * 0.5) : entryPrice - (distanceToTP1 * 0.5);
    
-   if(isBuy)
-      triggerPrice = entryPrice + (distanceToTP1 * 0.5); // 50% yuqorida
-   else
-      triggerPrice = entryPrice - (distanceToTP1 * 0.5); // 50% pastda
-      
-   // 3-qadam: Joriy narxni tekshirish
    double currentPrice = (isBuy ? SymbolInfoDouble(m_symbol, SYMBOL_BID) : SymbolInfoDouble(m_symbol, SYMBOL_ASK));
    
    bool triggerReached = false;
@@ -470,7 +600,6 @@ void CTradeManager::CheckPartialCloseAndBE(bool isBuy, long signalID)
    
    Print(">>> 50% Profit Reached! Executing Partial Close & BE. Signal: ", signalID);
    
-   // 4-qadam: Barcha mos orderlarni 50% yopish va BE ga olish
    for(int i = total - 1; i >= 0; i--)
    {
       ulong ticket = PositionGetTicket(i);
@@ -481,99 +610,32 @@ void CTradeManager::CheckPartialCloseAndBE(bool isBuy, long signalID)
       string comment = PositionGetString(POSITION_COMMENT);
       if(StringFind(comment, searchPattern) == -1) continue;
       
-      // A) Partial Close (50%)
       double currentVol = PositionGetDouble(POSITION_VOLUME);
       double closeVol = NormalizeVolume(currentVol * 0.5);
       
-      // Agar yopiladigan hajm minimal lotdan katta bo'lsa
       if(closeVol > 0 && closeVol < currentVol)
       {
-         if(m_trade.PositionClosePartial(ticket, closeVol))
-         {
-            Print("Partial Close 50%: #", ticket, " Vol: ", closeVol);
-         }
-         else
-         {
-            Print("Partial Close Failed: #", ticket, " Error: ", m_trade.ResultRetcodeDescription());
-         }
+         m_trade.PositionClosePartial(ticket, closeVol);
       }
       
-      // B) Move to BreakEven (Open Price)
-      // Qisman yopilganda ticket o'zgargan bo'lishi mumkin, shuning uchun qayta olish yaxshiroq
-      // Lekin MT5 da PositionClosePartial dan keyin qolgan qism shu ticketda qoladi
       double sl = NormalizePrice(entryPrice);
-      double tp = PositionGetDouble(POSITION_TP); // TP o'zgarmaydi
-      
-      // Hozirgi SL allaqachon BE yoki yaxshiroq ekanligini tekshirish
+      double tp = PositionGetDouble(POSITION_TP);
       double currentSL = PositionGetDouble(POSITION_SL);
       bool needUpdate = false;
       
-      if(isBuy)
-      {
-         if(currentSL < sl || currentSL == 0) needUpdate = true;
-      }
-      else
-      {
-         if(currentSL > sl || currentSL == 0) needUpdate = true;
-      }
+      if(isBuy) { if(currentSL < sl || currentSL == 0) needUpdate = true; }
+      else      { if(currentSL > sl || currentSL == 0) needUpdate = true; }
       
-      if(needUpdate)
-      {
-         if(m_trade.PositionModify(ticket, sl, tp))
-         {
-            Print("Moved to BE: #", ticket, " SL: ", sl);
-         }
-      }
+      if(needUpdate) m_trade.PositionModify(ticket, sl, tp);
    }
    
-   // 5-qadam: Flagni o'rnatish (qayta ishlamasligi uchun)
    if(isBuy) m_buyPartialClosed = true;
    else m_sellPartialClosed = true;
 }
 
 void CTradeManager::CheckAndSetBreakEven(bool isBuy, long signalID, double entryPrice)
 {
-   string searchPattern = (isBuy ? "SF-BUY-" : "SF-SELL-") + IntegerToString(signalID);
-   int total = PositionsTotal();
-   for(int i = total - 1; i >= 0; i--)
-   {
-      ulong ticket = PositionGetTicket(i);
-      if(ticket == 0) continue;
-      
-      if(PositionGetString(POSITION_SYMBOL) != m_symbol) continue;
-      if(PositionGetInteger(POSITION_MAGIC) != m_settings.magic) continue;
-      
-      string comment = PositionGetString(POSITION_COMMENT);
-      if(StringFind(comment, searchPattern) == -1) continue;
-      
-      double currentSL = PositionGetDouble(POSITION_SL);
-      double currentTP = PositionGetDouble(POSITION_TP);
-      double bePrice = NormalizePrice(entryPrice);
-      
-      bool needUpdate = false;
-      if(isBuy)
-      {
-         double currentBid = SymbolInfoDouble(m_symbol, SYMBOL_BID);
-         if((currentSL < bePrice || currentSL == 0) && currentBid > bePrice)
-            needUpdate = true;
-      }
-      else
-      {
-         double currentAsk = SymbolInfoDouble(m_symbol, SYMBOL_ASK);
-         if((currentSL > bePrice || currentSL == 0) && currentAsk < bePrice)
-            needUpdate = true;
-      }
-      
-      if(needUpdate)
-      {
-         if(m_trade.PositionModify(ticket, bePrice, currentTP))
-         {
-            Print("Position #", ticket, " moved to BreakEven at ", bePrice);
-         }
-         else
-         {
-            Print("Failed to set BreakEven for #", ticket, ". Error: ", m_trade.ResultRetcodeDescription());
-         }
-      }
-   }
+   // Bu funksiya endi CheckPartialCloseAndBE ichida qisman bajarilmoqda, 
+   // lekin manual BE uchun saqlab qo'yildi.
+   // Hozirgi kodda bu chaqirilmayapti.
 }
