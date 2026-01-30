@@ -327,17 +327,46 @@ void OnTick()
       }
    }
    
-   // RSI darajasini grafikda ko'rsatish (har tickda)
+// RSI darajasini grafikda ko'rsatish (har tickda)
    if(g_rsi != NULL && g_chart != NULL)
    {
+      // 1. Ma'lumotlarni olish
       double rsiValue = g_rsi.GetCurrentRSI();
       string rsiText = "RSI: " + DoubleToString(rsiValue, 2);
-      // Grafik markazi uchun taxminiy joylashuv (so'nggi bar va narx o'rtasi)
-      datetime labelTime = iTime(_Symbol, _Period, 0);
-      double priceMax = iHigh(_Symbol, _Period, 0);
-      double priceMin = iLow(_Symbol, _Period, 0);
-      double priceMid = (priceMax + priceMin) / 2.0;
-      g_chart.CreateLabel("SuperFibo_RSI_Center", labelTime, priceMid, rsiText, clrBlack, clrYellow, 0);
+      
+      datetime currentTime = iTime(_Symbol, _Period, 0);
+      datetime labelTime = currentTime + 10 * PeriodSeconds(_Period); // +2 bar o'ngga
+      double currentPrice = iClose(_Symbol, _Period, 0); // Close narxiga yopishtirish
+      
+      string objName = "SuperFibo_RSI_Center";
+      long chartID = ChartID(); // Hozirgi chart ID
+      
+      // 2. Obyekt mavjudligini tekshirish va yaratish
+      if(ObjectFind(chartID, objName) < 0)
+      {
+         // Agar yo'q bo'lsa, yaratamiz
+         g_chart.CreateLabel(objName, labelTime, currentPrice, rsiText, clrNONE, clrBlack, 0);
+         
+         // Boshlang'ich dizayn sozlamalari
+         ObjectSetInteger(chartID, objName, OBJPROP_FONTSIZE, 12); 
+         ObjectSetString(chartID, objName, OBJPROP_FONT, "Arial Black");
+         ObjectSetInteger(chartID, objName, OBJPROP_COLOR, clrBlack);
+         ObjectSetInteger(chartID, objName, OBJPROP_ANCHOR, ANCHOR_LEFT);
+         ObjectSetInteger(chartID, objName, OBJPROP_SELECTABLE, false);
+         ObjectSetInteger(chartID, objName, OBJPROP_SELECTED, false);
+      }
+
+      // 3. MAJBURIY YANGILASH (Eng muhim qismi)
+      // Obyekt oldindan bor bo'lsa ham, bu qism har tickda ishlaydi
+      
+      // Joylashuvni yangilash (Vaqt va Narx)
+      ObjectMove(chartID, objName, 0, labelTime, currentPrice);
+      
+      // Matnni yangilash (RSI qiymati)
+      ObjectSetString(chartID, objName, OBJPROP_TEXT, rsiText);
+      
+      // Chartni yangilash (o'zgarish darhol ko'rinishi uchun)
+      ChartRedraw(chartID);
    }
 
    // Yangi bar tekshiruvi
