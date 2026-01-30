@@ -556,8 +556,10 @@ void CTradeManager::ManagePositions()
    }
 }
 
+// --- YANGILANGAN FUNKSIYA: Partial Close va Instant BE ---
 void CTradeManager::CheckPartialCloseAndBE(bool isBuy, long signalID)
 {
+   // Agar allaqachon bajarilgan bo'lsa, qayta urinmaymiz
    if((isBuy && m_buyPartialClosed) || (!isBuy && m_sellPartialClosed))
       return;
       
@@ -565,9 +567,12 @@ void CTradeManager::CheckPartialCloseAndBE(bool isBuy, long signalID)
    
    double tp1Level = 0;
    double entryPrice = 0;
-   bool tp1Found = false;
+   bool tp1IsOpen = false;
+   bool anyOrderFound = false;
    
    int total = PositionsTotal();
+   
+   // 1-qadam: Signalga tegishli ma'lumotlarni yig'ish
    for(int i = 0; i < total; i++)
    {
       ulong ticket = PositionGetTicket(i);
@@ -576,30 +581,50 @@ void CTradeManager::CheckPartialCloseAndBE(bool isBuy, long signalID)
       if(PositionGetInteger(POSITION_MAGIC) != m_settings.magic) continue;
       
       string comment = PositionGetString(POSITION_COMMENT);
-      if(StringFind(comment, searchPattern) != -1 && StringFind(comment, "TP1") != -1)
+      if(StringFind(comment, searchPattern) != -1)
       {
-         tp1Level = PositionGetDouble(POSITION_TP);
-         entryPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-         tp1Found = true;
-         break;
+         // Kamida bitta order borligini belgilaymiz
+         anyOrderFound = true;
+         entryPrice = PositionGetDouble(POSITION_PRICE_OPEN); // Kirish narxini olamiz
+         
+         // TP1 orderini alohida qidiramiz
+         if(StringFind(comment, "TP1") != -1)
+         {
+            tp1Level = PositionGetDouble(POSITION_TP);
+            tp1IsOpen = true;
+         }
       }
    }
    
-   if(!tp1Found) return;
+   // Agar bu signalga tegishli hech qanday order qolmagan bo'lsa, chiqib ketamiz
+   if(!anyOrderFound) return;
    
-   double distanceToTP1 = MathAbs(tp1Level - entryPrice);
-   double triggerPrice = (isBuy) ? entryPrice + (distanceToTP1 * 0.5) : entryPrice - (distanceToTP1 * 0.5);
-   
+   // 2-qadam: Trigger shartini tekshirish
+   bool triggerReached = false;
    double currentPrice = (isBuy ? SymbolInfoDouble(m_symbol, SYMBOL_BID) : SymbolInfoDouble(m_symbol, SYMBOL_ASK));
    
-   bool triggerReached = false;
-   if(isBuy && currentPrice >= triggerPrice) triggerReached = true;
-   if(!isBuy && currentPrice <= triggerPrice) triggerReached = true;
+   if(tp1IsOpen)
+   {
+      // A) TP1 hali ochiq: Narx 50% masofaga yetganini tekshiramiz
+      double distanceToTP1 = MathAbs(tp1Level - entryPrice);
+      double triggerPrice = (isBuy) ? entryPrice + (distanceToTP1 * 0.5) : entryPrice - (distanceToTP1 * 0.5);
+      
+      if(isBuy && currentPrice >= triggerPrice) triggerReached = true;
+      if(!isBuy && currentPrice <= triggerPrice) triggerReached = true;
+   }
+   else
+   {
+      // B) TP1 topilmadi, lekin boshqa orderlar (TP2) bor.
+      // DEMAK: TP1 allaqachon urilgan va yopilgan. 
+      // Biz 100% masofadan o'tganmiz, shuning uchun darhol save qilish kerak.
+      triggerReached = true;
+   }
    
    if(!triggerReached) return;
    
-   Print(">>> 50% Profit Reached! Executing Partial Close & BE. Signal: ", signalID);
+   Print(">>> Profit Secure Triggered! Signal: ", signalID, (tp1IsOpen ? " (50% Reached)" : " (TP1 Closed)"));
    
+   // 3-qadam: Barcha mos orderlarni 50% yopish va BE ga olish
    for(int i = total - 1; i >= 0; i--)
    {
       ulong ticket = PositionGetTicket(i);
@@ -610,25 +635,56 @@ void CTradeManager::CheckPartialCloseAndBE(bool isBuy, long signalID)
       string comment = PositionGetString(POSITION_COMMENT);
       if(StringFind(comment, searchPattern) == -1) continue;
       
+      // A) Partial Close (50%)
       double currentVol = PositionGetDouble(POSITION_VOLUME);
+      
+      // Faqat minimal lotdan katta bo'lsa bo'lamiz (masalan 0.02 -> 0.01)
+      // Agar 0.01 bo'lsa, uni bo'lib bo'lmaydi, shunday qoldiramiz (faqat BE qilamiz)
       double closeVol = NormalizeVolume(currentVol * 0.5);
       
       if(closeVol > 0 && closeVol < currentVol)
       {
-         m_trade.PositionClosePartial(ticket, closeVol);
+         if(m_trade.PositionClosePartial(ticket, closeVol))
+         {
+            Print("Partial Close 50%: #", ticket, " Vol: ", closeVol);
+         }
+         else
+         {
+            Print("Partial Close Failed: #", ticket, " Error: ", m_trade.ResultRetcodeDescription());
+         }
       }
+      
+      // B) Move to BreakEven (Open Price)
+      // PositionClosePartial dan keyin ticket o'zgarmasligi kerak (MT5 da), lekin xavfsizlik uchun qayta tekshiramiz
+      // Agar qisman yopilgan bo'lsa ham, qolgan qismi uchun BE qilamiz
       
       double sl = NormalizePrice(entryPrice);
       double tp = PositionGetDouble(POSITION_TP);
       double currentSL = PositionGetDouble(POSITION_SL);
+      
       bool needUpdate = false;
       
-      if(isBuy) { if(currentSL < sl || currentSL == 0) needUpdate = true; }
-      else      { if(currentSL > sl || currentSL == 0) needUpdate = true; }
+      // Faqat zararli tomonda bo'lsa yoki SL umuman yo'q bo'lsa o'zgartiramiz
+      // Agar allaqachon foydaga surilgan bo'lsa (Trailing Stop), tegmaymiz
+      if(isBuy)
+      {
+         if(currentSL < sl || currentSL == 0) needUpdate = true;
+      }
+      else
+      {
+         if(currentSL > sl || currentSL == 0) needUpdate = true;
+      }
       
-      if(needUpdate) m_trade.PositionModify(ticket, sl, tp);
+      if(needUpdate)
+      {
+         if(m_trade.PositionModify(ticket, sl, tp))
+         {
+            Print("Moved to BE: #", ticket, " SL: ", sl);
+         }
+      }
    }
    
+   // Flagni o'rnatish (qayta ishlamasligi uchun)
    if(isBuy) m_buyPartialClosed = true;
    else m_sellPartialClosed = true;
 }
