@@ -15,7 +15,7 @@
 #include "modules/FibonacciLevels.mqh"
 #include "modules/ChartDrawing.mqh"
 #include "modules/TradeManager.mqh"
-
+#include "modules/TelegramNotifier.mqh"
 //+------------------------------------------------------------------+
 //| INPUT PARAMETRLAR                                                |
 //+------------------------------------------------------------------+
@@ -100,6 +100,12 @@ input int               InpSLPoints         = 100;      // Stop Loss (points)
 input int               InpTP1Points        = 50;       // Take Profit 1 (points)
 input int               InpTP2Points        = 150;      // Take Profit 2 (points)
 
+// ═══════════════════ TELEGRAM SOZLAMALARI ═══════════════════
+input group "══════════ Telegram Notifications ══════════"
+input bool              InpUseTelegram      = false;          // Enable Telegram
+input string            InpBotToken         = "";             // Bot Token
+input string            InpChatIDs          = "";             // Chat IDs (comma separated)
+
 //+------------------------------------------------------------------+
 //| GLOBAL O'ZGARUVCHILAR                                            |
 //+------------------------------------------------------------------+
@@ -108,6 +114,7 @@ CPivotDetector* g_pivot             = NULL;
 CFibonacciLevels* g_fibo              = NULL;
 CChartDrawing* g_chart             = NULL;
 CTradeManager* g_trade             = NULL;
+CTelegramNotifier* g_telegram          = NULL;
 datetime                g_lastBarTime       = 0;
 bool                    g_initSuccess       = false;
 
@@ -133,6 +140,7 @@ int OnInit()
    g_fibo  = new CFibonacciLevels();
    g_chart = new CChartDrawing();
    g_trade = new CTradeManager();
+   g_telegram = new CTelegramNotifier();
    
    // RSI sozlamalari
    RSISettings rsiSettings;
@@ -159,6 +167,14 @@ int OnInit()
       Print("Pivot Initialization failed!");
       return INIT_FAILED;
    }
+   
+   // Telegram Initialization
+   TelegramSettings tgSettings;
+   tgSettings.enable  = InpUseTelegram;
+   tgSettings.token   = InpBotToken;
+   tgSettings.chatIDs = InpChatIDs;
+   
+   g_telegram.Init(_Symbol, tgSettings);
    
    // Fibonacci sozlamalari
    FiboSettings fiboSettings;
@@ -245,7 +261,7 @@ void OnDeinit(const int reason)
    if(g_fibo != NULL) { delete g_fibo; g_fibo = NULL; }
    if(g_chart != NULL) { delete g_chart; g_chart = NULL; }
    if(g_trade != NULL) { delete g_trade; g_trade = NULL; }
-   
+   if(g_telegram != NULL) { delete g_telegram; g_telegram = NULL; }
    Print("SuperFibo EA Deinitialized.");
 }
 
@@ -401,7 +417,17 @@ void OnTick()
                         Print("✓ BUY setup bajarildi - Entry1 pozitsiyalar ochildi!");
                         g_originalBuyFibo = buyFibo;
                         g_buyFiboActive = true;
+                        
+                        // TELEGRAMGA YUBORISH
+                        if(g_telegram != NULL)
+                           g_telegram.SendSignal(true, fibo.entry1.price, buyFibo);
                      }
+                  }
+                  // Agar savdo o'chiq bo'lsa ham signal kelishi uchun else blokiga ham qo'shishingiz mumkin
+                  else if(InpUseTelegram) 
+                  {
+                      if(g_telegram != NULL)
+                           g_telegram.SendSignal(true, buyFibo.entry1.price, buyFibo);
                   }
                }
             }
@@ -439,7 +465,17 @@ void OnTick()
                         Print("✓ SELL setup bajarildi - Entry1 pozitsiyalar ochildi!");
                         g_originalSellFibo = sellFibo;
                         g_sellFiboActive = true;
+                        
+                        // TELEGRAMGA YUBORISH
+                        if(g_telegram != NULL)
+                           g_telegram.SendSignal(false, sellFibo.entry1.price, sellFibo);
                      }
+                  }
+                  // Agar savdo o'chiq bo'lsa ham signal kelishi uchun:
+                  else if(InpUseTelegram) 
+                  {
+                      if(g_telegram != NULL)
+                           g_telegram.SendSignal(false, sellFibo.entry1.price, sellFibo);
                   }
                }
             }

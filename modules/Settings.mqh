@@ -108,5 +108,10 @@ int GetLabelSize(int size)
       default: return 7;   // Small
    }
 }
-
+struct TelegramSettings
+{
+   bool     enable;        // Yoqish/O'chirish
+   string   token;         // Bot Token
+   string   chatIDs;       // Chat IDlar (vergul bilan)
+};
 //+------------------------------------------------------------------+
