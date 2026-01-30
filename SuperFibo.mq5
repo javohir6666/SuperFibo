@@ -22,12 +22,12 @@
 
 // ═══════════════════ ISH VAQTI VA NEWS TIME OFF SOZLAMALARI ═══════════════════
 input group "══════════ Time Filter Settings ══════════"
-input bool   InpUseWorkTime     = false;   // Ish vaqtini cheklash (on/off)
-input string InpWorkTimeStart   = "06:00"; // Ish boshlanishi (broker vaqti)
-input string InpWorkTimeEnd     = "16:00"; // Ish tugashi (broker vaqti)
-input bool   InpUseNewsTimeOff  = false;   // News time off (on/off)
-input string InpNewsTimeStart   = "15:00"; // News boshlanishi (broker vaqti)
-input string InpNewsTimeEnd     = "16:00"; // News tugashi (broker vaqti)
+input bool   InpUseWorkTime     = false;    // Ish vaqtini cheklash (on/off)
+input string InpWorkTimeStart   = "06:00";  // Ish boshlanishi (broker vaqti)
+input string InpWorkTimeEnd     = "16:00";  // Ish tugashi (broker vaqti)
+input bool   InpUseNewsTimeOff  = false;    // News time off (on/off)
+input string InpNewsTimeStart   = "15:00";  // News boshlanishi (broker vaqti)
+input string InpNewsTimeEnd     = "16:00";  // News tugashi (broker vaqti)
 
 // ═══════════════════ RSI SOZLAMALARI ═══════════════════
 input group "══════════ RSI Settings ══════════"
@@ -103,12 +103,11 @@ input int               InpTP2Points        = 150;      // Take Profit 2 (points
 //+------------------------------------------------------------------+
 //| GLOBAL O'ZGARUVCHILAR                                            |
 //+------------------------------------------------------------------+
-CRSICalculator*         g_rsi               = NULL;
-CPivotDetector*         g_pivot             = NULL;
-CFibonacciLevels*       g_fibo              = NULL;
-CChartDrawing*          g_chart             = NULL;
-CTradeManager*          g_trade             = NULL;
-
+CRSICalculator* g_rsi               = NULL;
+CPivotDetector* g_pivot             = NULL;
+CFibonacciLevels* g_fibo              = NULL;
+CChartDrawing* g_chart             = NULL;
+CTradeManager* g_trade             = NULL;
 datetime                g_lastBarTime       = 0;
 bool                    g_initSuccess       = false;
 
@@ -127,7 +126,7 @@ int OnInit()
    Print("  SuperFibo EA Initialization");
    Print("  Pine Script -> MQL5 Port");
    Print("═══════════════════════════════════════════════════");
-   
+
    // Modullarni yaratish
    g_rsi   = new CRSICalculator();
    g_pivot = new CPivotDetector();
@@ -165,18 +164,23 @@ int OnInit()
    FiboSettings fiboSettings;
    fiboSettings.lineBars     = InpFiboBars;
    fiboSettings.entry1Level  = InpEntry1Level;
+   
    fiboSettings.showEntry2   = InpShowEntry2;
    fiboSettings.entry2Level  = InpEntry2Level;
    fiboSettings.entry2Color  = InpEntry2Color;
+   
    fiboSettings.showEntry3   = InpShowEntry3;
    fiboSettings.entry3Level  = InpEntry3Level;
    fiboSettings.entry3Color  = InpEntry3Color;
+   
    fiboSettings.showSL       = InpShowSL;
    fiboSettings.slLevel      = InpSLLevel;
    fiboSettings.slColor      = InpSLColor;
+   
    fiboSettings.showTP1      = InpShowTP1;
    fiboSettings.tp1Level     = InpTP1Level;
    fiboSettings.tp1Color     = InpTP1Color;
+   
    fiboSettings.showTP2      = InpShowTP2;
    fiboSettings.tp2Level     = InpTP2Level;
    fiboSettings.tp2Color     = InpTP2Color;
@@ -236,35 +240,11 @@ void OnDeinit(const int reason)
    Print("SuperFibo EA Deinitialization. Reason: ", reason);
    
    // Modullarni tozalash
-   if(g_rsi != NULL)
-   {
-      delete g_rsi;
-      g_rsi = NULL;
-   }
-   
-   if(g_pivot != NULL)
-   {
-      delete g_pivot;
-      g_pivot = NULL;
-   }
-   
-   if(g_fibo != NULL)
-   {
-      delete g_fibo;
-      g_fibo = NULL;
-   }
-   
-   if(g_chart != NULL)
-   {
-      delete g_chart;
-      g_chart = NULL;
-   }
-   
-   if(g_trade != NULL)
-   {
-      delete g_trade;
-      g_trade = NULL;
-   }
+   if(g_rsi != NULL) { delete g_rsi; g_rsi = NULL; }
+   if(g_pivot != NULL) { delete g_pivot; g_pivot = NULL; }
+   if(g_fibo != NULL) { delete g_fibo; g_fibo = NULL; }
+   if(g_chart != NULL) { delete g_chart; g_chart = NULL; }
+   if(g_trade != NULL) { delete g_trade; g_trade = NULL; }
    
    Print("SuperFibo EA Deinitialized.");
 }
@@ -277,24 +257,35 @@ void OnTick()
    if(!g_initSuccess)
       return;
 
-   // 1. MQL5 da vaqtni to'g'ri olish usuli
-   datetime now = TimeCurrent();
-   MqlDateTime dt;       // Vaqt strukturasini yaratamiz
-   TimeToStruct(now, dt); // 'now' vaqtini strukturaga aylantiramiz
-
-   int hour = dt.hour;   // Soatni olamiz
-   int min = dt.min;     // Daqiqani olamiz
+   // 1. Yangi bar tekshiruvini ENG BOSHIGA olamiz
+   datetime currentBarTime = iTime(_Symbol, _Period, 0);
+   bool isNewBar = (currentBarTime != g_lastBarTime);
    
+   // Agar yangi bar bo'lsa, vaqtni yangilaymiz
+   if(isNewBar)
+      g_lastBarTime = currentBarTime;
+
+   // 2. RSI ni yangilash (isNewBar flagini uzatamiz)
+   // Bu endi har tickda ma'lumot oladi, lekin tarixni faqat yangi barda suradi
+   if(g_rsi != NULL)
+      g_rsi.Update(isNewBar);
+
+   // ═══════════════════ TIME FILTERS ═══════════════════
+   datetime now = TimeCurrent();
+   MqlDateTime dt;
+   TimeToStruct(now, dt);
+
+   int hour = dt.hour;
+   int min = dt.min;
    string curTime = StringFormat("%02d:%02d", hour, min);
 
-   // Ish vaqti va news time off tekshiruvi
    bool workTimeOk = true;
    if(InpUseWorkTime)
    {
       if(InpWorkTimeStart < InpWorkTimeEnd)
          workTimeOk = (curTime >= InpWorkTimeStart && curTime < InpWorkTimeEnd);
       else
-         workTimeOk = (curTime >= InpWorkTimeStart || curTime < InpWorkTimeEnd); // kechadan boshlab
+         workTimeOk = (curTime >= InpWorkTimeStart || curTime < InpWorkTimeEnd);
    }
 
    bool newsTimeOff = false;
@@ -309,14 +300,14 @@ void OnTick()
    if(!workTimeOk || newsTimeOff)
       return;
 
-   // Pozitsiyalarni boshqarish (breakeven monitoring)
+   // ═══════════════════ TRADE MANAGEMENT ═══════════════════
    if(InpEnableTrading)
    {
-      g_trade.ManagePositions();
+      g_trade.ManagePositions(); // Partial close & BE ichida bajariladi
+      
       // Martingale monitoring (har tick)
       if(g_buyFiboActive)
       {
-         Print("DEBUG: Checking Martingale BUY - Active=", g_buyFiboActive);
          g_trade.CheckMartingaleEntry2Buy(g_originalBuyFibo);
          g_trade.CheckMartingaleEntry3Buy(g_originalBuyFibo);
       }
@@ -327,27 +318,26 @@ void OnTick()
       }
    }
    
-// RSI darajasini grafikda ko'rsatish (har tickda)
+   // ═══════════════════ RSI LABEL (Real-Time) ═══════════════════
    if(g_rsi != NULL && g_chart != NULL)
    {
-      // 1. Ma'lumotlarni olish
-      double rsiValue = g_rsi.GetCurrentRSI();
+      double rsiValue = g_rsi.GetCurrentRSI(); // Endi har tickda yangilanadi
       string rsiText = "RSI: " + DoubleToString(rsiValue, 2);
       
-      datetime currentTime = iTime(_Symbol, _Period, 0);
-      datetime labelTime = currentTime + 10 * PeriodSeconds(_Period); // +2 bar o'ngga
-      double currentPrice = iClose(_Symbol, _Period, 0); // Close narxiga yopishtirish
+      // +2 bar o'ngga surish
+      datetime labelTime = currentBarTime + 10 * PeriodSeconds(_Period);
+      // Close narxiga yopishtirish
+      double currentPrice = iClose(_Symbol, _Period, 0);
       
       string objName = "SuperFibo_RSI_Center";
-      long chartID = ChartID(); // Hozirgi chart ID
-      
-      // 2. Obyekt mavjudligini tekshirish va yaratish
+      long chartID = ChartID();
+
+      // Obyektni yaratish yoki topish
       if(ObjectFind(chartID, objName) < 0)
       {
-         // Agar yo'q bo'lsa, yaratamiz
          g_chart.CreateLabel(objName, labelTime, currentPrice, rsiText, clrNONE, clrBlack, 0);
          
-         // Boshlang'ich dizayn sozlamalari
+         // Dizayn sozlamalari
          ObjectSetInteger(chartID, objName, OBJPROP_FONTSIZE, 12); 
          ObjectSetString(chartID, objName, OBJPROP_FONT, "Arial Black");
          ObjectSetInteger(chartID, objName, OBJPROP_COLOR, clrBlack);
@@ -356,60 +346,32 @@ void OnTick()
          ObjectSetInteger(chartID, objName, OBJPROP_SELECTED, false);
       }
 
-      // 3. MAJBURIY YANGILASH (Eng muhim qismi)
-      // Obyekt oldindan bor bo'lsa ham, bu qism har tickda ishlaydi
-      
-      // Joylashuvni yangilash (Vaqt va Narx)
+      // Majburiy yangilash (Move & Text update)
       ObjectMove(chartID, objName, 0, labelTime, currentPrice);
-      
-      // Matnni yangilash (RSI qiymati)
       ObjectSetString(chartID, objName, OBJPROP_TEXT, rsiText);
-      
-      // Chartni yangilash (o'zgarish darhol ko'rinishi uchun)
       ChartRedraw(chartID);
    }
 
-   // Yangi bar tekshiruvi
-   datetime currentBarTime = iTime(_Symbol, _Period, 0);
-   bool isNewBar = (currentBarTime != g_lastBarTime);
-
+   // ═══════════════════ YANGI BAR LOGIKASI ═══════════════════
    if(isNewBar)
    {
-      g_lastBarTime = currentBarTime;
       // Modullarni yangilash
-      g_rsi.Update();
       g_pivot.Update();
       
-      // Pivot nuqtalarni chizish (agar yoqilgan bo'lsa)
+      // Pivot nuqtalarni chizish
       if(InpShowPivots)
       {
          PivotData pivotHigh, pivotLow;
-         
-         if(g_pivot.GetLastPivotHigh(pivotHigh))
-         {
-            g_chart.DrawPivotHigh(pivotHigh.time, pivotHigh.price);
-         }
-         
-         if(g_pivot.GetLastPivotLow(pivotLow))
-         {
-            g_chart.DrawPivotLow(pivotLow.time, pivotLow.price);
-         }
+         if(g_pivot.GetLastPivotHigh(pivotHigh)) g_chart.DrawPivotHigh(pivotHigh.time, pivotHigh.price);
+         if(g_pivot.GetLastPivotLow(pivotLow)) g_chart.DrawPivotLow(pivotLow.time, pivotLow.price);
       }
       
-      // S/R chiziqlarni chizish (agar yoqilgan bo'lsa)
+      // S/R chiziqlarni chizish
       if(InpShowSR)
       {
          PivotData pivotHigh, pivotLow;
-         
-         if(g_pivot.GetLastPivotHigh(pivotHigh))
-         {
-            g_chart.DrawResistanceLine(pivotHigh.time, pivotHigh.price, InpSRLength);
-         }
-         
-         if(g_pivot.GetLastPivotLow(pivotLow))
-         {
-            g_chart.DrawSupportLine(pivotLow.time, pivotLow.price, InpSRLength);
-         }
+         if(g_pivot.GetLastPivotHigh(pivotHigh)) g_chart.DrawResistanceLine(pivotHigh.time, pivotHigh.price, InpSRLength);
+         if(g_pivot.GetLastPivotLow(pivotLow)) g_chart.DrawSupportLine(pivotLow.time, pivotLow.price, InpSRLength);
       }
       
       // ═══════════════════ BUY SIGNAL TEKSHIRUVI ═══════════════════
@@ -427,20 +389,16 @@ void OnTick()
             // Fibonacci hisoblash
             if(g_fibo.CalculateBuyFibo(lastPivotHigh.price, osLow))
             {
-               // Fibonacci chizish
                FiboStructure buyFibo;
                if(g_fibo.GetBuyFibo(buyFibo))
                {
                   g_chart.DrawBuyFibo(buyFibo, InpFiboBars);
-                  
-                  // Savdo (agar yoqilgan bo'lsa)
+                  // Savdo
                   if(InpEnableTrading)
                   {
                      if(g_trade.ExecuteBuySetup(buyFibo))
                      {
                         Print("✓ BUY setup bajarildi - Entry1 pozitsiyalar ochildi!");
-                        
-                        // Original Fibo ni saqlash (martingale uchun)
                         g_originalBuyFibo = buyFibo;
                         g_buyFiboActive = true;
                      }
@@ -469,20 +427,16 @@ void OnTick()
             // Fibonacci hisoblash
             if(g_fibo.CalculateSellFibo(lastPivotLow.price, obHigh))
             {
-               // Fibonacci chizish
                FiboStructure sellFibo;
                if(g_fibo.GetSellFibo(sellFibo))
                {
                   g_chart.DrawSellFibo(sellFibo, InpFiboBars);
-                  
-                  // Savdo (agar yoqilgan bo'lsa)
+                  // Savdo
                   if(InpEnableTrading)
                   {
                      if(g_trade.ExecuteSellSetup(sellFibo))
                      {
                         Print("✓ SELL setup bajarildi - Entry1 pozitsiyalar ochildi!");
-                        
-                        // Original Fibo ni saqlash (martingale uchun)
                         g_originalSellFibo = sellFibo;
                         g_sellFiboActive = true;
                      }
@@ -497,4 +451,3 @@ void OnTick()
       }
    }
 }
-//+------------------------------------------------------------------+

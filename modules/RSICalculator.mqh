@@ -24,21 +24,22 @@ public:
    // Konstruktor
    CRSICalculator(void);
    ~CRSICalculator(void);
-   
+
    // Initsializatsiya
    bool Init(string symbol, ENUM_TIMEFRAMES timeframe, RSISettings &settings);
    void Deinit(void);
-   
+
    // RSI qiymatini olish
    bool GetRSI(int shift, double &value);
    double GetCurrentRSI(void);
    
    // Signal tekshirish
-   bool IsOversoldEntry(void);          // OS zonaga kirish (BUY signal)
-   bool IsOverboughtEntry(void);        // OB zonaga kirish (SELL signal)
+   bool IsOversoldEntry(void);           // OS zonaga kirish (BUY signal)
+   bool IsOverboughtEntry(void);         // OB zonaga kirish (SELL signal)
    
-   // Yordamchi funksiyalar
-   bool Update(void);                    // Ma'lumotlarni yangilash
+   // Ma'lumotlarni yangilash
+   // O'zgartirish: isNewBar parametri qo'shildi
+   bool Update(bool isNewBar); 
 };
 
 //+------------------------------------------------------------------+
@@ -68,7 +69,7 @@ bool CRSICalculator::Init(string symbol, ENUM_TIMEFRAMES timeframe, RSISettings 
    m_symbol = symbol;
    m_timeframe = timeframe;
    m_settings = settings;
-   
+
    // RSI indikatorini yaratish
    m_handle = iRSI(m_symbol, m_timeframe, m_settings.period, PRICE_CLOSE);
    
@@ -94,8 +95,8 @@ bool CRSICalculator::Init(string symbol, ENUM_TIMEFRAMES timeframe, RSISettings 
       return false;
    }
    
-   // Dastlabki yangilanish
-   if(!Update())
+   // Dastlabki yangilanish (Init bo'lgani uchun true beramiz)
+   if(!Update(true))
    {
       Print("RSI dastlabki yangilanishda xato");
       return false;
@@ -119,21 +120,24 @@ void CRSICalculator::Deinit(void)
 //+------------------------------------------------------------------+
 //| Ma'lumotlarni yangilash                                          |
 //+------------------------------------------------------------------+
-bool CRSICalculator::Update(void)
+bool CRSICalculator::Update(bool isNewBar)
 {
    if(m_handle == INVALID_HANDLE)
       return false;
-   
-   // RSI ma'lumotlarini olish (3 ta bar)
+      
+   // 1. RSI ma'lumotlarini HAR DOIM yangilaymiz (Har tickda)
    if(CopyBuffer(m_handle, 0, 0, 3, m_rsiBuffer) < 3)
    {
       Print("RSI ma'lumotlarini olishda xato: ", GetLastError());
       return false;
    }
    
-   // Oldingi qiymatlarni saqlash (crossover aniqlash uchun)
-   m_prevRSI[1] = m_prevRSI[0];
-   m_prevRSI[0] = m_rsiBuffer[1];
+   // 2. Tarixni siljitish (Shift) FAQAT yangi barda bajariladi
+   if(isNewBar)
+   {
+      m_prevRSI[1] = m_prevRSI[0];
+      m_prevRSI[0] = m_rsiBuffer[1];
+   }
    
    return true;
 }
@@ -173,7 +177,6 @@ double CRSICalculator::GetCurrentRSI(void)
 bool CRSICalculator::IsOversoldEntry(void)
 {
    // Avvalgi bar OS dan yuqorida, hozirgi bar OS dan pastda
-   // Bu RSI OS darajasini yuqoridan pastga kesib o'tganligini bildiradi
    if(m_prevRSI[1] > 0 && m_prevRSI[0] > 0)
    {
       if(m_prevRSI[1] >= m_settings.oversold && m_prevRSI[0] < m_settings.oversold)
@@ -192,7 +195,6 @@ bool CRSICalculator::IsOversoldEntry(void)
 bool CRSICalculator::IsOverboughtEntry(void)
 {
    // Avvalgi bar OB dan pastda, hozirgi bar OB dan yuqorida
-   // Bu RSI OB darajasini pastdan yuqoriga kesib o'tganligini bildiradi
    if(m_prevRSI[1] > 0 && m_prevRSI[0] > 0)
    {
       if(m_prevRSI[1] <= m_settings.overbought && m_prevRSI[0] > m_settings.overbought)
@@ -203,5 +205,3 @@ bool CRSICalculator::IsOverboughtEntry(void)
    
    return false;
 }
-
-//+------------------------------------------------------------------+
