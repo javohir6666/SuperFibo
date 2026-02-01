@@ -278,23 +278,27 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 //| Expert tick function                                             |
 //+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//| Expert tick function                                             |
+//+------------------------------------------------------------------+
 void OnTick()
 {
+   // Agar initsializatsiya muvaffaqiyatsiz bo'lsa, ishlamaymiz
    if(!g_initSuccess)
       return;
 
-   // 1. Yangi bar tekshiruvi
+   // 1. Yangi bar va RSI yangilanishi (Bular har doim hisoblanishi kerak)
    datetime currentBarTime = iTime(_Symbol, _Period, 0);
    bool isNewBar = (currentBarTime != g_lastBarTime);
    
    if(isNewBar)
       g_lastBarTime = currentBarTime;
 
-   // 2. RSI ni yangilash (har doim, lekin isNewBar flagi bilan)
+   // RSI ma'lumotlarini yangilash
    if(g_rsi != NULL)
       g_rsi.Update(isNewBar);
 
-   // ═══════════════════ VAQT VA KUN FILTRLARI ═══════════════════
+   // ═══════════════════ VAQT VA KUN FILTRLARI (ENG MUHIM QISM) ═══════════════════
    datetime now = TimeCurrent();
    MqlDateTime dt;
    TimeToStruct(now, dt);
@@ -312,8 +316,6 @@ void OnTick()
       case 0: dayOk = InpSunday;    break;
    }
 
-   if(!dayOk) return; // Agar bugun ruxsat etilgan kun bo'lmasa, chiqish
-
    // B) Ish soatini tekshirish
    int hour = dt.hour;
    int min = dt.min;
@@ -322,21 +324,28 @@ void OnTick()
    bool workTimeOk = true;
    if(InpUseWorkTime)
    {
+      // Agar boshlanish vaqti tugash vaqtidan kichik bo'lsa (masalan 08:00 dan 17:00 gacha)
       if(InpWorkTimeStart < InpWorkTimeEnd)
          workTimeOk = (curTime >= InpWorkTimeStart && curTime < InpWorkTimeEnd);
+      // Agar tun orqali o'tsa (masalan 22:00 dan 04:00 gacha)
       else
          workTimeOk = (curTime >= InpWorkTimeStart || curTime < InpWorkTimeEnd);
    }
 
-   if(!workTimeOk)
-      return; // Agar belgilangan vaqt bo'lmasa, chiqish
+   // 🛑 BLOKLASH: Agar kun yoki vaqt to'g'ri kelmasa, shu zahoti chiqib ketamiz.
+   // Bu ManagePositions va Martingale funksiyalarining ishlashiga yo'l qo'ymaydi.
+   if(!dayOk || !workTimeOk)
+      return; 
+
 
    // ═══════════════════ SAVDO VA MONITORING ═══════════════════
+   // Faqat yuqoridagi filtrdan o'tgan bo'lsagina bu yerga yetib keladi
    if(InpEnableTrading)
    {
+      // Ochiq pozitsiyalar nazorati (Breakeven, Trailing va h.k.)
       g_trade.ManagePositions();
       
-      // Martingale monitoring (har tickda)
+      // Martingale monitoring (har tickda narxni tekshirish)
       if(g_buyFiboActive)
       {
          g_trade.CheckMartingaleEntry2Buy(g_originalBuyFibo);
@@ -349,7 +358,7 @@ void OnTick()
       }
    }
    
-   // RSI Labelni ekranda yangilash (Real-Time)
+   // RSI Labelni ekranda yangilash (Vizual qism)
    if(g_rsi != NULL && g_chart != NULL)
    {
       double rsiValue = g_rsi.GetCurrentRSI();
@@ -358,69 +367,132 @@ void OnTick()
       double currentPrice = iClose(_Symbol, _Period, 0);
       
       string objName = "SuperFibo_RSI_Center";
+      // Obyekt yo'q bo'lsa yaratamiz
       if(ObjectFind(ChartID(), objName) < 0)
          g_chart.CreateLabel(objName, labelTime, currentPrice, rsiText, clrNONE, clrBlack, 0);
 
+      // Obyektni yangilaymiz
       ObjectMove(ChartID(), objName, 0, labelTime, currentPrice);
       ObjectSetString(ChartID(), objName, OBJPROP_TEXT, rsiText);
    }
 
-   // ═══════════════════ YANGI BAR LOGIKASI ═══════════════════
+   // ═══════════════════ YANGI BAR LOGIKASI (Yangi Signallar) ═══════════════════
    if(isNewBar)
    {
+      // Pivotlarni yangilash
       g_pivot.Update();
       
-      // Pivot va S/R chiziqlarni chizish
+      // Grafikda chizish
       if(InpShowPivots)
       {
-         PivotData ph, pl;
-         if(g_pivot.GetLastPivotHigh(ph)) g_chart.DrawPivotHigh(ph.time, ph.price);
-         if(g_pivot.GetLastPivotLow(pl)) g_chart.DrawPivotLow(pl.time, pl.price);
+         PivotData pivotHigh, pivotLow;
+         if(g_pivot.GetLastPivotHigh(pivotHigh)) g_chart.DrawPivotHigh(pivotHigh.time, pivotHigh.price);
+         if(g_pivot.GetLastPivotLow(pivotLow)) g_chart.DrawPivotLow(pivotLow.time, pivotLow.price);
       }
       
-      // BUY SIGNAL TEKSHIRUVI
+      // S/R chiziqlarni chizish
+      if(InpShowSR)
+      {
+         PivotData pivotHigh, pivotLow;
+         if(g_pivot.GetLastPivotHigh(pivotHigh)) g_chart.DrawResistanceLine(pivotHigh.time, pivotHigh.price, InpSRLength);
+         if(g_pivot.GetLastPivotLow(pivotLow)) g_chart.DrawSupportLine(pivotLow.time, pivotLow.price, InpSRLength);
+      }
+      
+      // 🟢 BUY SIGNAL TEKSHIRUVI
       if(g_rsi.IsOversoldEntry())
       {
+         Print("══════════════════════════════════════");
+         Print(" BUY SIGNAL DETECTED!");
+         Print("══════════════════════════════════════");
+         
          PivotData lastPivotHigh;
          if(g_pivot.GetLastPivotHigh(lastPivotHigh))
          {
-            double osLow = iLow(_Symbol, _Period, 1);
+            double osLow = iLow(_Symbol, _Period, 1); // Oldingi bar Low
+            
+            // Fibonacci hisoblash
             if(g_fibo.CalculateBuyFibo(lastPivotHigh.price, osLow))
             {
                FiboStructure buyFibo;
                if(g_fibo.GetBuyFibo(buyFibo))
                {
                   g_chart.DrawBuyFibo(buyFibo, InpFiboBars);
-                  if(InpEnableTrading && g_trade.ExecuteBuySetup(buyFibo))
+                  
+                  // Savdo ochish
+                  if(InpEnableTrading)
                   {
-                     g_originalBuyFibo = buyFibo;
-                     g_buyFiboActive = true;
+                     if(g_trade.ExecuteBuySetup(buyFibo))
+                     {
+                        Print("✓ BUY setup bajarildi - Entry1 pozitsiyalar ochildi!");
+                        g_originalBuyFibo = buyFibo;
+                        g_buyFiboActive = true;
+                        
+                        // Telegram
+                        if(g_telegram != NULL)
+                           g_telegram.SendSignal(true, buyFibo.entry1.price, buyFibo);
+                     }
+                  }
+                  // Agar savdo o'chiq bo'lsa, faqat telegramga signal yuborish
+                  else if(InpUseTelegram) 
+                  {
+                     if(g_telegram != NULL)
+                        g_telegram.SendSignal(true, buyFibo.entry1.price, buyFibo);
                   }
                }
             }
          }
+         else
+         {
+            Print("BUY signal: Pivot High topilmadi!");
+         }
       }
       
-      // SELL SIGNAL TEKSHIRUVI
+      // 🔴 SELL SIGNAL TEKSHIRUVI
       if(g_rsi.IsOverboughtEntry())
       {
+         Print("══════════════════════════════════════");
+         Print(" SELL SIGNAL DETECTED!");
+         Print("══════════════════════════════════════");
+         
          PivotData lastPivotLow;
          if(g_pivot.GetLastPivotLow(lastPivotLow))
          {
-            double obHigh = iHigh(_Symbol, _Period, 1);
+            double obHigh = iHigh(_Symbol, _Period, 1); // Oldingi bar High
+            
+            // Fibonacci hisoblash
             if(g_fibo.CalculateSellFibo(lastPivotLow.price, obHigh))
             {
                FiboStructure sellFibo;
                if(g_fibo.GetSellFibo(sellFibo))
                {
                   g_chart.DrawSellFibo(sellFibo, InpFiboBars);
-                  if(InpEnableTrading && g_trade.ExecuteSellSetup(sellFibo))
+                  
+                  // Savdo ochish
+                  if(InpEnableTrading)
                   {
-                     g_originalSellFibo = sellFibo;
-                     g_sellFiboActive = true;
+                     if(g_trade.ExecuteSellSetup(sellFibo))
+                     {
+                        Print("✓ SELL setup bajarildi - Entry1 pozitsiyalar ochildi!");
+                        g_originalSellFibo = sellFibo;
+                        g_sellFiboActive = true;
+                        
+                        // Telegram
+                        if(g_telegram != NULL)
+                           g_telegram.SendSignal(false, sellFibo.entry1.price, sellFibo);
+                     }
+                  }
+                  // Agar savdo o'chiq bo'lsa, faqat telegramga signal yuborish
+                  else if(InpUseTelegram) 
+                  {
+                     if(g_telegram != NULL)
+                        g_telegram.SendSignal(false, sellFibo.entry1.price, sellFibo);
                   }
                }
             }
+         }
+         else
+         {
+            Print("SELL signal: Pivot Low topilmadi!");
          }
       }
    }
