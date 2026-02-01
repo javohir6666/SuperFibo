@@ -420,7 +420,7 @@ void OnTick()
                         
                         // TELEGRAMGA YUBORISH
                         if(g_telegram != NULL)
-                           g_telegram.SendSignal(true, fibo.entry1.price, buyFibo);
+                           g_telegram.SendSignal(true, buyFibo.entry1.price, buyFibo);
                      }
                   }
                   // Agar savdo o'chiq bo'lsa ham signal kelishi uchun else blokiga ham qo'shishingiz mumkin
