@@ -5,124 +5,136 @@
 //+------------------------------------------------------------------+
 
 //+------------------------------------------------------------------+
-//| Umumiy sozlamalar va strukturalar                                |
+//| SL Qo'yish rejimi                                                |
 //+------------------------------------------------------------------+
+enum ENUM_SL_MODE
+{
+   SL_MODE_DYNAMIC_FIBO,      // Fibo darajasi bo'yicha (masalan 1.3)
+   SL_MODE_STATIC_OFFSET      // Sweep narxidan ma'lum masofada (Points)
+};
+
+struct TradeSettings
+{
+   bool     enableTrading;       // Savdo yoqilganmi
+   double   lotSize;             // Lot hajmi
+   int      slippage;            // Slippage
+   int      magic;               // Magic raqam
+   string   comment;             // Izoh
+   
+   // Risk Management
+   bool     useBreakeven;        // Breakeven ishlatish
+   bool     useMartingale;       // Martingale ishlatish
+   
+   // SL Sozlamalari
+   ENUM_SL_MODE slMode;          // SL turi
+   int      slOffsetPoints;      // Agar Static Offset bo'lsa, qancha masofa (points)
+};
 
 // RSI sozlamalari
 struct RSISettings
 {
-   int      period;              // RSI periodi
-   double   overbought;          // Overbought darajasi
-   double   oversold;            // Oversold darajasi
+   int      period;
+   double   overbought;
+   double   oversold;
 };
 
 // Pivot sozlamalari
 struct PivotSettings
 {
-   int      leftBars;            // Chap tarafdagi barlar soni
-   int      rightBars;           // O'ng tarafdagi barlar soni
-   bool     showPivots;          // Pivot nuqtalarni ko'rsatish
-   bool     showSR;              // Support/Resistance chiziqlarni ko'rsatish
-   int      srLength;            // S/R chiziq uzunligi (barlar)
+   int      leftBars;
+   int      rightBars;
+   bool     showPivots;
+   bool     showSR;
+   int      srLength;
 };
 
 // Fibonacci sozlamalari
 struct FiboSettings
 {
-   int      lineBars;            // Fibo chiziq uzunligi (barlar)
-   double   entry1Level;         // Entry 1 darajasi
+   int      lineBars;
+   double   entry1Level;
    
-   bool     showEntry2;          // Entry 2 ni ko'rsatish
-   double   entry2Level;         // Entry 2 darajasi
-   color    entry2Color;         // Entry 2 rangi
+   bool     showEntry2;
+   double   entry2Level;
+   color    entry2Color;
    
-   bool     showEntry3;          // Entry 3 ni ko'rsatish
-   double   entry3Level;         // Entry 3 darajasi
-   color    entry3Color;         // Entry 3 rangi
+   bool     showEntry3;
+   double   entry3Level;
+   color    entry3Color;
    
-   bool     showSL;              // SL ni ko'rsatish
-   double   slLevel;             // SL darajasi (Fibo level)
-   color    slColor;             // SL rangi
+   bool     showSL;
+   double   slLevel;
+   color    slColor;
    
-   bool     showTP1;             // TP1 ni ko'rsatish
-   double   tp1Level;            // TP1 darajasi
-   color    tp1Color;            // TP1 rangi
+   bool     showTP1;
+   double   tp1Level;
+   color    tp1Color;
    
-   bool     showTP2;             // TP2 ni ko'rsatish
-   double   tp2Level;            // TP2 darajasi
-   color    tp2Color;            // TP2 rangi
+   bool     showTP2;
+   double   tp2Level;
+   color    tp2Color;
 };
 
 // Chizish sozlamalari
 struct DrawSettings
 {
-   int      labelSize;           // Label o'lchami (0=Tiny, 1=Small, 2=Normal, 3=Large, 4=Huge)
+   int      labelSize;
 };
 
-// Pivot ma'lumotlari
+// Pivot Data
 struct PivotData
 {
-   double   price;               // Pivot narxi
-   int      barIndex;            // Bar indeksi
-   datetime time;                // Vaqt
-   bool     isValid;             // Ma'lumot mavjudmi
+   double   price;
+   int      barIndex;
+   datetime time;
+   bool     isValid;
 };
 
-// Fibonacci daraja ma'lumoti
+// Fibonacci Level
 struct FiboLevel
 {
-   double   price;               // Narx
-   string   name;                // Nom (Entry 1, Entry 2, TP1, va h.k.)
-   color    lineColor;           // Chiziq rangi
-   bool     show;                // Ko'rsatish kerakmi
+   double   price;
+   string   name;
+   color    lineColor;
+   bool     show;
 };
 
-// Fibonacci struktura (BUY yoki SELL uchun)
+// Fibo Structure
 struct FiboStructure
 {
-   bool           isActive;      // Faolmi
-   datetime       signalTime;    // Signal vaqti
-   int            signalBar;     // Signal bar indeksi
+   bool           isActive;
+   datetime       signalTime;
+   int            signalBar;
    
-   double         level0;        // 0-daraja (Pivot)
-   double         level1;        // 1-daraja (OS Low yoki OB High)
+   double         level0;        // Pivot
+   double         level1;        // Sweep Point (Entry trigger)
    
-   FiboLevel      entry1;        // Entry 1
-   FiboLevel      entry2;        // Entry 2
-   FiboLevel      entry3;        // Entry 3
-   FiboLevel      sl;            // Stop Loss
-   FiboLevel      tp1;           // Take Profit 1
-   FiboLevel      tp2;           // Take Profit 2
+   FiboLevel      entry1;
+   FiboLevel      entry2;
+   FiboLevel      entry3;
+   FiboLevel      sl;
+   FiboLevel      tp1;
+   FiboLevel      tp2;
 };
 
-struct TimeFilterSettings
+// Telegram Settings
+struct TelegramSettings
 {
-   bool Monday;
-   bool Tuesday;
-   bool Wednesday;
-   bool Thursday;
-   bool Friday;
-   bool Saturday;
-   bool Sunday;
+   bool     enable;
+   string   token;
+   string   chatIDs;
 };
 
-// Label o'lchamlarini olish
+// Label o'lchami
 int GetLabelSize(int size)
 {
    switch(size)
    {
-      case 0:  return 6;   // Tiny
-      case 1:  return 7;   // Small
-      case 2:  return 8;   // Normal
-      case 3:  return 10;  // Large
-      case 4:  return 12;  // Huge
-      default: return 7;   // Small
+      case 0:  return 6;
+      case 1:  return 7;
+      case 2:  return 8;
+      case 3:  return 10;
+      case 4:  return 12;
+      default: return 7;
    }
 }
-struct TelegramSettings
-{
-   bool     enable;        // Yoqish/O'chirish
-   string   token;         // Bot Token
-   string   chatIDs;       // Chat IDlar (vergul bilan)
-};
-//+------------------------------------------------------------------+
