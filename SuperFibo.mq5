@@ -209,13 +209,19 @@ void OnDeinit(const int reason)
    if(g_telegram != NULL) { delete g_telegram; g_telegram = NULL; }
 }
 
+//+------------------------------------------------------------------+
+//| Expert tick function                                             |
+//+------------------------------------------------------------------+
 void OnTick()
 {
    if(!g_initSuccess) return;
 
+   // 1. Yangi bar tekshiruvi (Hisob-kitoblar uchun signal)
    datetime currentBarTime = iTime(_Symbol, _Period, 0);
    bool isNewBar = (currentBarTime != g_lastBarTime);
    if(isNewBar) g_lastBarTime = currentBarTime;
+   
+   // RSI ni har tickda yangilab turamiz (Indicator buferi uchun), lekin signalni NewBar da olamiz
    if(g_rsi != NULL) g_rsi.Update(isNewBar);
 
    // 2. VAQT VA KUN FILTRLARI
@@ -245,9 +251,10 @@ void OnTick()
          workTimeOk = (curTime >= InpWorkTimeStart || curTime < InpWorkTimeEnd);
    }
 
+   // Agar savdo vaqti bo'lmasa, qaytib chiqamiz
    if(!dayOk || !workTimeOk) return; 
 
-   // 3. SAVDO VA MONITORING
+   // 3. SAVDO VA MONITORING (Har tickda ishlaydi, masalan Trailing Stop uchun)
    if(InpEnableTrading)
    {
       g_trade.ManagePositions();
@@ -261,7 +268,7 @@ void OnTick()
       }
    }
    
-   // RSI Label
+   // RSI Label (Vizual)
    if(g_rsi != NULL && g_chart != NULL) {
       double rsiValue = g_rsi.GetCurrentRSI();
       string rsiText = "RSI: " + DoubleToString(rsiValue, 2);
@@ -274,11 +281,13 @@ void OnTick()
       ObjectSetString(ChartID(), objName, OBJPROP_TEXT, rsiText);
    }
 
-   // 4. SIGNAL QIDIRISH (KUTISH REJIMI)
+   // 4. SIGNAL VA SWEEP TEKSHIRUVI (FAQAT YANGI BARDA)
+   // Bu yerda biz sham yopilishini kutamiz va "tanasi bilan yorish" yoki "soya" ni aniqlaymiz.
    if(isNewBar)
    {
       g_pivot.Update();
       
+      // Pivotlarni chizish
       if(InpShowPivots) {
          PivotData ph, pl;
          if(g_pivot.GetLastPivotHigh(ph)) g_chart.DrawPivotHigh(ph.time, ph.price);
@@ -290,7 +299,128 @@ void OnTick()
          if(g_pivot.GetLastPivotLow(pl)) g_chart.DrawSupportLine(pl.time, pl.price, InpSRLength);
       }
 
-      // Signal aniqlash -> Sweep kutishni boshlash
+      // -----------------------------------------------------------------
+      // A) SWEEP TEKSHIRUVI (Oldingi signallar uchun)
+      // Biz indeks 1 dagi (yopilgan) shamni tekshiramiz
+      // -----------------------------------------------------------------
+      
+      // --- BUY SWEEP ---
+      if(g_waitForBuySweep)
+      {
+         int barsPassed = iBarShift(_Symbol, _Period, g_buySignalTime);
+         
+         // 5 tadan ko'p sham o'tib ketgan bo'lsa - bekor qilish
+         if(barsPassed > 5) 
+         {
+            g_waitForBuySweep = false;
+         }
+         else
+         {
+            // YOPILGAN (tarixiy) shamni tekshiramiz (Index 1)
+            // Bizga yopilgan shamning Low qiymati kerak
+            double prevLow = iLow(_Symbol, _Period, 1);
+            
+            // Sweep bo'ldimi? (Yopilgan shamning Low'i Signal Low'dan pastmi?)
+            if(prevLow < g_buySignalLow)
+            {
+               Print("🔥 BUY SWEEP CONFIRMED (Closed Bar)!");
+               
+               PivotData lastPivotHigh;
+               if(g_pivot.GetLastPivotHigh(lastPivotHigh))
+               {
+                  // Fibo hisoblash (PivotHigh -> SweepLow)
+                  double sweepPrice = prevLow; 
+                  
+                  if(g_fibo.CalculateBuyFibo(lastPivotHigh.price, sweepPrice))
+                  {
+                     FiboStructure buyFibo;
+                     if(g_fibo.GetBuyFibo(buyFibo))
+                     {
+                        // SL Hisoblash
+                        double slPrice = 0;
+                        if(InpSLMode == SL_MODE_STATIC_OFFSET)
+                           slPrice = sweepPrice - InpSLOffsetPoints * _Point;
+                        else if(InpSLMode == SL_MODE_DYNAMIC_FIBO)
+                           slPrice = buyFibo.sl.price;
+                        
+                        g_chart.DrawBuyFibo(buyFibo, InpFiboBars);
+                        
+                        if(InpEnableTrading) {
+                           if(g_trade.ExecuteBuySetup(buyFibo, slPrice)) {
+                              g_originalBuyFibo = buyFibo;
+                              g_buyFiboActive = true;
+                              if(g_telegram != NULL) g_telegram.SendSignal(true, buyFibo.entry1.price, buyFibo);
+                           }
+                        } else if(InpUseTelegram) {
+                           if(g_telegram != NULL) g_telegram.SendSignal(true, buyFibo.entry1.price, buyFibo);
+                        }
+                     }
+                  }
+               }
+               // Signal ishlatildi, endi kutmaymiz
+               g_waitForBuySweep = false;
+            }
+         }
+      }
+
+      // --- SELL SWEEP ---
+      if(g_waitForSellSweep)
+      {
+         int barsPassed = iBarShift(_Symbol, _Period, g_sellSignalTime);
+         
+         if(barsPassed > 5) 
+         {
+            g_waitForSellSweep = false;
+         }
+         else
+         {
+            // YOPILGAN (tarixiy) shamni tekshiramiz (Index 1)
+            double prevHigh = iHigh(_Symbol, _Period, 1);
+            
+            // Sweep bo'ldimi?
+            if(prevHigh > g_sellSignalHigh)
+            {
+               Print("🔥 SELL SWEEP CONFIRMED (Closed Bar)!");
+               
+               PivotData lastPivotLow;
+               if(g_pivot.GetLastPivotLow(lastPivotLow))
+               {
+                  double sweepPrice = prevHigh;
+                  
+                  if(g_fibo.CalculateSellFibo(lastPivotLow.price, sweepPrice))
+                  {
+                     FiboStructure sellFibo;
+                     if(g_fibo.GetSellFibo(sellFibo))
+                     {
+                        // SL Hisoblash
+                        double slPrice = 0;
+                        if(InpSLMode == SL_MODE_STATIC_OFFSET)
+                           slPrice = sweepPrice + InpSLOffsetPoints * _Point;
+                        else if(InpSLMode == SL_MODE_DYNAMIC_FIBO)
+                           slPrice = sellFibo.sl.price;
+
+                        g_chart.DrawSellFibo(sellFibo, InpFiboBars);
+                        
+                        if(InpEnableTrading) {
+                           if(g_trade.ExecuteSellSetup(sellFibo, slPrice)) {
+                              g_originalSellFibo = sellFibo;
+                              g_sellFiboActive = true;
+                              if(g_telegram != NULL) g_telegram.SendSignal(false, sellFibo.entry1.price, sellFibo);
+                           }
+                        } else if(InpUseTelegram) {
+                           if(g_telegram != NULL) g_telegram.SendSignal(false, sellFibo.entry1.price, sellFibo);
+                        }
+                     }
+                  }
+               }
+               g_waitForSellSweep = false;
+            }
+         }
+      }
+
+      // -----------------------------------------------------------------
+      // B) YANGI SIGNAL QIDIRISH
+      // -----------------------------------------------------------------
       if(g_rsi.IsOversoldEntry()) {
          Print("📡 RSI BUY Signal. Waiting for SWEEP...");
          g_waitForBuySweep = true;
@@ -303,124 +433,6 @@ void OnTick()
          g_waitForSellSweep = true;
          g_sellSignalHigh   = iHigh(_Symbol, _Period, 1);
          g_sellSignalTime   = iTime(_Symbol, _Period, 1);
-      }
-   }
-
-   // 5. SWEEP TEKSHIRUVI (Har tickda)
-   // --- BUY SWEEP ---
-   if(g_waitForBuySweep)
-   {
-      int barsPassed = iBarShift(_Symbol, _Period, g_buySignalTime);
-      if(barsPassed > 5) g_waitForBuySweep = false;
-      else
-      {
-         double currentLow = iLow(_Symbol, _Period, 0);
-         // Sweep bo'ldimi?
-         if(currentLow < g_buySignalLow)
-         {
-            Print("🔥 BUY SWEEP DETECTED!");
-            PivotData lastPivotHigh;
-            if(g_pivot.GetLastPivotHigh(lastPivotHigh))
-            {
-               // Fibo hisoblash (PivotHigh -> SweepLow)
-               // SweepLow sifatida joriy Low yoki aniq signal Low olinadi
-               double sweepPrice = currentLow; 
-               
-               if(g_fibo.CalculateBuyFibo(lastPivotHigh.price, sweepPrice))
-               {
-                  FiboStructure buyFibo;
-                  if(g_fibo.GetBuyFibo(buyFibo))
-                  {
-                     // --- SL HISOBLASH ---
-                     double slPrice = 0;
-                     if(InpSLMode == SL_MODE_STATIC_OFFSET)
-                     {
-                        // Sweep narxidan pastroq (offset points)
-                        slPrice = sweepPrice - InpSLOffsetPoints * _Point;
-                     }
-                     else if(InpSLMode == SL_MODE_DYNAMIC_FIBO)
-                     {
-                        // Fibo darajasi (Class ichida calculate qilingan bo'ladi)
-                        slPrice = buyFibo.sl.price;
-                     }
-                     
-                     g_chart.DrawBuyFibo(buyFibo, InpFiboBars);
-                     
-                     if(InpEnableTrading)
-                     {
-                        if(g_trade.ExecuteBuySetup(buyFibo, slPrice))
-                        {
-                           g_originalBuyFibo = buyFibo;
-                           g_buyFiboActive = true;
-                           if(g_telegram != NULL) g_telegram.SendSignal(true, buyFibo.entry1.price, buyFibo);
-                        }
-                     }
-                     else if(InpUseTelegram) 
-                     {
-                        if(g_telegram != NULL) g_telegram.SendSignal(true, buyFibo.entry1.price, buyFibo);
-                     }
-                  }
-               }
-            }
-            g_waitForBuySweep = false;
-         }
-      }
-   }
-
-   // --- SELL SWEEP ---
-   if(g_waitForSellSweep)
-   {
-      int barsPassed = iBarShift(_Symbol, _Period, g_sellSignalTime);
-      if(barsPassed > 5) g_waitForSellSweep = false;
-      else
-      {
-         double currentHigh = iHigh(_Symbol, _Period, 0);
-         // Sweep bo'ldimi?
-         if(currentHigh > g_sellSignalHigh)
-         {
-            Print("🔥 SELL SWEEP DETECTED!");
-            PivotData lastPivotLow;
-            if(g_pivot.GetLastPivotLow(lastPivotLow))
-            {
-               double sweepPrice = currentHigh;
-               
-               if(g_fibo.CalculateSellFibo(lastPivotLow.price, sweepPrice))
-               {
-                  FiboStructure sellFibo;
-                  if(g_fibo.GetSellFibo(sellFibo))
-                  {
-                     // --- SL HISOBLASH ---
-                     double slPrice = 0;
-                     if(InpSLMode == SL_MODE_STATIC_OFFSET)
-                     {
-                        // Sweep narxidan yuqoriroq (offset points)
-                        slPrice = sweepPrice + InpSLOffsetPoints * _Point;
-                     }
-                     else if(InpSLMode == SL_MODE_DYNAMIC_FIBO)
-                     {
-                        slPrice = sellFibo.sl.price;
-                     }
-
-                     g_chart.DrawSellFibo(sellFibo, InpFiboBars);
-                     
-                     if(InpEnableTrading)
-                     {
-                        if(g_trade.ExecuteSellSetup(sellFibo, slPrice))
-                        {
-                           g_originalSellFibo = sellFibo;
-                           g_sellFiboActive = true;
-                           if(g_telegram != NULL) g_telegram.SendSignal(false, sellFibo.entry1.price, sellFibo);
-                        }
-                     }
-                     else if(InpUseTelegram) 
-                     {
-                        if(g_telegram != NULL) g_telegram.SendSignal(false, sellFibo.entry1.price, sellFibo);
-                     }
-                  }
-               }
-            }
-            g_waitForSellSweep = false;
-         }
       }
    }
 }
