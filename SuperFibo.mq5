@@ -19,16 +19,6 @@
 //+------------------------------------------------------------------+
 //| INPUT PARAMETRLAR                                                |
 //+------------------------------------------------------------------+
-
-// ═══════════════════ ISH VAQTI VA NEWS TIME OFF SOZLAMALARI ═══════════════════
-input group "══════════ Time Filter Settings ══════════"
-input bool   InpUseWorkTime     = false;    // Ish vaqtini cheklash (on/off)
-input string InpWorkTimeStart   = "06:00";  // Ish boshlanishi (broker vaqti)
-input string InpWorkTimeEnd     = "16:00";  // Ish tugashi (broker vaqti)
-input bool   InpUseNewsTimeOff  = false;    // News time off (on/off)
-input string InpNewsTimeStart   = "15:00";  // News boshlanishi (broker vaqti)
-input string InpNewsTimeEnd     = "16:00";  // News tugashi (broker vaqti)
-
 // ═══════════════════ RSI SOZLAMALARI ═══════════════════
 input group "══════════ RSI Settings ══════════"
 input int               InpRSIPeriod        = 14;       // RSI Period
@@ -99,6 +89,26 @@ sinput string           InpStaticNote       = "Only for Static Points Mode"; // 
 input int               InpSLPoints         = 100;      // Stop Loss (points)
 input int               InpTP1Points        = 50;       // Take Profit 1 (points)
 input int               InpTP2Points        = 150;      // Take Profit 2 (points)
+
+// ═══════════════════ ISH VAQTI VA KUNLARI ═══════════════════
+input group "══════════ Time Filter Settings ══════════"
+input bool   InpUseWorkTime     = false;      // Ish vaqtini cheklash (on/off)
+input string InpWorkTimeStart   = "06:00";    // Ish boshlanishi (06:00)
+input string InpWorkTimeEnd     = "16:00";    // Ish tugashi (16:00)
+
+input group "══════════ NewsTime Filter Settings ══════════"
+input bool   InpUseNewsTimeOff  = false;    // News time off (on/off)
+input string InpNewsTimeStart   = "15:00";  // News boshlanishi (broker vaqti)
+input string InpNewsTimeEnd     = "16:00";  // News tugashi (broker vaqti)
+
+input group "══════════ Day Filter Settings ══════════"
+input bool   InpMonday          = true;       // Dushanba
+input bool   InpTuesday         = true;       // Seshanba
+input bool   InpWednesday       = true;       // Chorshanba
+input bool   InpThursday        = true;       // Payshanba
+input bool   InpFriday          = true;       // Juma
+input bool   InpSaturday        = false;      // Shanba
+input bool   InpSunday          = false;      // Yakshanba
 
 // ═══════════════════ TELEGRAM SOZLAMALARI ═══════════════════
 input group "══════════ Telegram Notifications ══════════"
@@ -273,24 +283,38 @@ void OnTick()
    if(!g_initSuccess)
       return;
 
-   // 1. Yangi bar tekshiruvini ENG BOSHIGA olamiz
+   // 1. Yangi bar tekshiruvi
    datetime currentBarTime = iTime(_Symbol, _Period, 0);
    bool isNewBar = (currentBarTime != g_lastBarTime);
    
-   // Agar yangi bar bo'lsa, vaqtni yangilaymiz
    if(isNewBar)
       g_lastBarTime = currentBarTime;
 
-   // 2. RSI ni yangilash (isNewBar flagini uzatamiz)
-   // Bu endi har tickda ma'lumot oladi, lekin tarixni faqat yangi barda suradi
+   // 2. RSI ni yangilash (har doim, lekin isNewBar flagi bilan)
    if(g_rsi != NULL)
       g_rsi.Update(isNewBar);
 
-   // ═══════════════════ TIME FILTERS ═══════════════════
+   // ═══════════════════ VAQT VA KUN FILTRLARI ═══════════════════
    datetime now = TimeCurrent();
    MqlDateTime dt;
    TimeToStruct(now, dt);
 
+   // A) Haftaning kunini tekshirish
+   bool dayOk = false;
+   switch(dt.day_of_week)
+   {
+      case 1: dayOk = InpMonday;    break;
+      case 2: dayOk = InpTuesday;   break;
+      case 3: dayOk = InpWednesday; break;
+      case 4: dayOk = InpThursday;  break;
+      case 5: dayOk = InpFriday;    break;
+      case 6: dayOk = InpSaturday;  break;
+      case 0: dayOk = InpSunday;    break;
+   }
+
+   if(!dayOk) return; // Agar bugun ruxsat etilgan kun bo'lmasa, chiqish
+
+   // B) Ish soatini tekshirish
    int hour = dt.hour;
    int min = dt.min;
    string curTime = StringFormat("%02d:%02d", hour, min);
@@ -304,24 +328,15 @@ void OnTick()
          workTimeOk = (curTime >= InpWorkTimeStart || curTime < InpWorkTimeEnd);
    }
 
-   bool newsTimeOff = false;
-   if(InpUseNewsTimeOff)
-   {
-      if(InpNewsTimeStart < InpNewsTimeEnd)
-         newsTimeOff = (curTime >= InpNewsTimeStart && curTime < InpNewsTimeEnd);
-      else
-         newsTimeOff = (curTime >= InpNewsTimeStart || curTime < InpNewsTimeEnd);
-   }
+   if(!workTimeOk)
+      return; // Agar belgilangan vaqt bo'lmasa, chiqish
 
-   if(!workTimeOk || newsTimeOff)
-      return;
-
-   // ═══════════════════ TRADE MANAGEMENT ═══════════════════
+   // ═══════════════════ SAVDO VA MONITORING ═══════════════════
    if(InpEnableTrading)
    {
-      g_trade.ManagePositions(); // Partial close & BE ichida bajariladi
+      g_trade.ManagePositions();
       
-      // Martingale monitoring (har tick)
+      // Martingale monitoring (har tickda)
       if(g_buyFiboActive)
       {
          g_trade.CheckMartingaleEntry2Buy(g_originalBuyFibo);
@@ -334,155 +349,78 @@ void OnTick()
       }
    }
    
-   // ═══════════════════ RSI LABEL (Real-Time) ═══════════════════
+   // RSI Labelni ekranda yangilash (Real-Time)
    if(g_rsi != NULL && g_chart != NULL)
    {
-      double rsiValue = g_rsi.GetCurrentRSI(); // Endi har tickda yangilanadi
+      double rsiValue = g_rsi.GetCurrentRSI();
       string rsiText = "RSI: " + DoubleToString(rsiValue, 2);
-      
-      // +2 bar o'ngga surish
       datetime labelTime = currentBarTime + 10 * PeriodSeconds(_Period);
-      // Close narxiga yopishtirish
       double currentPrice = iClose(_Symbol, _Period, 0);
       
       string objName = "SuperFibo_RSI_Center";
-      long chartID = ChartID();
-
-      // Obyektni yaratish yoki topish
-      if(ObjectFind(chartID, objName) < 0)
-      {
+      if(ObjectFind(ChartID(), objName) < 0)
          g_chart.CreateLabel(objName, labelTime, currentPrice, rsiText, clrNONE, clrBlack, 0);
-         
-         // Dizayn sozlamalari
-         ObjectSetInteger(chartID, objName, OBJPROP_FONTSIZE, 12); 
-         ObjectSetString(chartID, objName, OBJPROP_FONT, "Arial Black");
-         ObjectSetInteger(chartID, objName, OBJPROP_COLOR, clrBlack);
-         ObjectSetInteger(chartID, objName, OBJPROP_ANCHOR, ANCHOR_LEFT);
-         ObjectSetInteger(chartID, objName, OBJPROP_SELECTABLE, false);
-         ObjectSetInteger(chartID, objName, OBJPROP_SELECTED, false);
-      }
 
-      // Majburiy yangilash (Move & Text update)
-      ObjectMove(chartID, objName, 0, labelTime, currentPrice);
-      ObjectSetString(chartID, objName, OBJPROP_TEXT, rsiText);
-      ChartRedraw(chartID);
+      ObjectMove(ChartID(), objName, 0, labelTime, currentPrice);
+      ObjectSetString(ChartID(), objName, OBJPROP_TEXT, rsiText);
    }
 
    // ═══════════════════ YANGI BAR LOGIKASI ═══════════════════
    if(isNewBar)
    {
-      // Modullarni yangilash
       g_pivot.Update();
       
-      // Pivot nuqtalarni chizish
+      // Pivot va S/R chiziqlarni chizish
       if(InpShowPivots)
       {
-         PivotData pivotHigh, pivotLow;
-         if(g_pivot.GetLastPivotHigh(pivotHigh)) g_chart.DrawPivotHigh(pivotHigh.time, pivotHigh.price);
-         if(g_pivot.GetLastPivotLow(pivotLow)) g_chart.DrawPivotLow(pivotLow.time, pivotLow.price);
+         PivotData ph, pl;
+         if(g_pivot.GetLastPivotHigh(ph)) g_chart.DrawPivotHigh(ph.time, ph.price);
+         if(g_pivot.GetLastPivotLow(pl)) g_chart.DrawPivotLow(pl.time, pl.price);
       }
       
-      // S/R chiziqlarni chizish
-      if(InpShowSR)
-      {
-         PivotData pivotHigh, pivotLow;
-         if(g_pivot.GetLastPivotHigh(pivotHigh)) g_chart.DrawResistanceLine(pivotHigh.time, pivotHigh.price, InpSRLength);
-         if(g_pivot.GetLastPivotLow(pivotLow)) g_chart.DrawSupportLine(pivotLow.time, pivotLow.price, InpSRLength);
-      }
-      
-      // ═══════════════════ BUY SIGNAL TEKSHIRUVI ═══════════════════
+      // BUY SIGNAL TEKSHIRUVI
       if(g_rsi.IsOversoldEntry())
       {
-         Print("══════════════════════════════════════");
-         Print(" BUY SIGNAL DETECTED!");
-         Print("══════════════════════════════════════");
-         
          PivotData lastPivotHigh;
          if(g_pivot.GetLastPivotHigh(lastPivotHigh))
          {
-            double osLow = iLow(_Symbol, _Period, 1); // Oldingi bar Low
-            
-            // Fibonacci hisoblash
+            double osLow = iLow(_Symbol, _Period, 1);
             if(g_fibo.CalculateBuyFibo(lastPivotHigh.price, osLow))
             {
                FiboStructure buyFibo;
                if(g_fibo.GetBuyFibo(buyFibo))
                {
                   g_chart.DrawBuyFibo(buyFibo, InpFiboBars);
-                  // Savdo
-                  if(InpEnableTrading)
+                  if(InpEnableTrading && g_trade.ExecuteBuySetup(buyFibo))
                   {
-                     if(g_trade.ExecuteBuySetup(buyFibo))
-                     {
-                        Print("✓ BUY setup bajarildi - Entry1 pozitsiyalar ochildi!");
-                        g_originalBuyFibo = buyFibo;
-                        g_buyFiboActive = true;
-                        
-                        // TELEGRAMGA YUBORISH
-                        if(g_telegram != NULL)
-                           g_telegram.SendSignal(true, buyFibo.entry1.price, buyFibo);
-                     }
-                  }
-                  // Agar savdo o'chiq bo'lsa ham signal kelishi uchun else blokiga ham qo'shishingiz mumkin
-                  else if(InpUseTelegram) 
-                  {
-                      if(g_telegram != NULL)
-                           g_telegram.SendSignal(true, buyFibo.entry1.price, buyFibo);
+                     g_originalBuyFibo = buyFibo;
+                     g_buyFiboActive = true;
                   }
                }
             }
          }
-         else
-         {
-            Print("BUY signal: Pivot High topilmadi!");
-         }
       }
       
-      // ═══════════════════ SELL SIGNAL TEKSHIRUVI ═══════════════════
+      // SELL SIGNAL TEKSHIRUVI
       if(g_rsi.IsOverboughtEntry())
       {
-         Print("══════════════════════════════════════");
-         Print(" SELL SIGNAL DETECTED!");
-         Print("══════════════════════════════════════");
-         
          PivotData lastPivotLow;
          if(g_pivot.GetLastPivotLow(lastPivotLow))
          {
-            double obHigh = iHigh(_Symbol, _Period, 1); // Oldingi bar High
-            
-            // Fibonacci hisoblash
+            double obHigh = iHigh(_Symbol, _Period, 1);
             if(g_fibo.CalculateSellFibo(lastPivotLow.price, obHigh))
             {
                FiboStructure sellFibo;
                if(g_fibo.GetSellFibo(sellFibo))
                {
                   g_chart.DrawSellFibo(sellFibo, InpFiboBars);
-                  // Savdo
-                  if(InpEnableTrading)
+                  if(InpEnableTrading && g_trade.ExecuteSellSetup(sellFibo))
                   {
-                     if(g_trade.ExecuteSellSetup(sellFibo))
-                     {
-                        Print("✓ SELL setup bajarildi - Entry1 pozitsiyalar ochildi!");
-                        g_originalSellFibo = sellFibo;
-                        g_sellFiboActive = true;
-                        
-                        // TELEGRAMGA YUBORISH
-                        if(g_telegram != NULL)
-                           g_telegram.SendSignal(false, sellFibo.entry1.price, sellFibo);
-                     }
-                  }
-                  // Agar savdo o'chiq bo'lsa ham signal kelishi uchun:
-                  else if(InpUseTelegram) 
-                  {
-                      if(g_telegram != NULL)
-                           g_telegram.SendSignal(false, sellFibo.entry1.price, sellFibo);
+                     g_originalSellFibo = sellFibo;
+                     g_sellFiboActive = true;
                   }
                }
             }
-         }
-         else
-         {
-            Print("SELL signal: Pivot Low topilmadi!");
          }
       }
    }

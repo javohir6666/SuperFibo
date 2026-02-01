@@ -95,6 +95,17 @@ struct FiboStructure
    FiboLevel      tp2;           // Take Profit 2
 };
 
+struct TimeFilterSettings
+{
+   bool Monday;
+   bool Tuesday;
+   bool Wednesday;
+   bool Thursday;
+   bool Friday;
+   bool Saturday;
+   bool Sunday;
+};
+
 // Label o'lchamlarini olish
 int GetLabelSize(int size)
 {
