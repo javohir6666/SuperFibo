@@ -1,360 +1,153 @@
 //+------------------------------------------------------------------+
 //|                                               ChartDrawing.mqh |
 //|                               Copyright 2025, Javohir Abdullayev |
-//|                                               https://pycoder.uz |
 //+------------------------------------------------------------------+
-
 #include "Settings.mqh"
 
-//+------------------------------------------------------------------+
-//| Chart Drawing Manager klassi                                    |
-//+------------------------------------------------------------------+
 class CChartDrawing
 {
 private:
-   DrawSettings      m_settings;         // Sozlamalar
-   string            m_symbol;           // Symbol
-   long              m_chartID;          // Chart ID
-   
-   string            m_prefix;           // Obyekt nomlari prefiksi
+   DrawSettings      m_settings;
+   string            m_symbol;
+   long              m_chartID;
+   string            m_prefix;
    
 public:
-   // Konstruktor
-   CChartDrawing(void);
-   ~CChartDrawing(void);
-   
-   // Initsializatsiya
-   bool Init(string symbol, long chartID, DrawSettings &settings, string prefix = "SuperFibo_");
-   void Deinit(void);
-   
-   // Fibo chizish
-   bool DrawBuyFibo(FiboStructure &fibo, int lineBars);
-   bool DrawSellFibo(FiboStructure &fibo, int lineBars);
-   
-   // Pivot chizish
-   bool DrawPivotHigh(datetime time, double price);
-   bool DrawPivotLow(datetime time, double price);
-   
-   // S/R chiziqlar
-   bool DrawSupportLine(datetime time, double price, int length);
-   bool DrawResistanceLine(datetime time, double price, int length);
-   
-   // Tozalash
-   void DeleteBuyFibo(void);
-   void DeleteSellFibo(void);
-   void DeleteAllObjects(void);
-   
-private:
-   // Yordamchi funksiyalar
-   bool CreateLine(string name, datetime time1, double price1, datetime time2, double price2, color clr, int width = 1);
-   bool CreateLabel(string name, datetime time, double price, string text, color bgColor, color textColor, int corner = CORNER_LEFT_UPPER);
-   void DeleteObjectsByPrefix(string prefix);
-};
+   CChartDrawing(void) : m_chartID(0), m_prefix("SuperFibo_") {}
+   ~CChartDrawing(void) { Deinit(); }
 
-//+------------------------------------------------------------------+
-//| Konstruktor                                                      |
-//+------------------------------------------------------------------+
-CChartDrawing::CChartDrawing(void)
-{
-   m_chartID = 0;
-   m_prefix = "SuperFibo_";
-}
-
-//+------------------------------------------------------------------+
-//| Destruktor                                                       |
-//+------------------------------------------------------------------+
-CChartDrawing::~CChartDrawing(void)
-{
-   Deinit();
-}
-
-//+------------------------------------------------------------------+
-//| Initsializatsiya                                                 |
-//+------------------------------------------------------------------+
-bool CChartDrawing::Init(string symbol, long chartID, DrawSettings &settings, string prefix = "SuperFibo_")
-{
-   m_symbol = symbol;
-   m_chartID = chartID;
-   m_settings = settings;
-   m_prefix = prefix;
-   
-   return true;
-}
-
-//+------------------------------------------------------------------+
-//| Deinitsializatsiya                                               |
-//+------------------------------------------------------------------+
-void CChartDrawing::Deinit(void)
-{
-   DeleteAllObjects();
-}
-
-//+------------------------------------------------------------------+
-//| BUY Fibonacci chizish                                            |
-//+------------------------------------------------------------------+
-bool CChartDrawing::DrawBuyFibo(FiboStructure &fibo, int lineBars)
-{
-   if(!fibo.isActive)
-      return false;
-   
-   // Eski BUY Fibo ni o'chirish
-   DeleteBuyFibo();
-   
-   datetime startTime = TimeCurrent();
-   datetime endTime = startTime + lineBars * PeriodSeconds(PERIOD_CURRENT);
-   
-   // Entry 1 (asosiy, har doim ko'rsatiladi)
-   if(fibo.entry1.show)
+   bool Init(string symbol, long chartID, DrawSettings &settings, string prefix = "SuperFibo_")
    {
-      CreateLine(m_prefix + "Buy_Entry1", startTime, fibo.entry1.price, endTime, fibo.entry1.price, 
-                 fibo.entry1.lineColor, 2);
-      CreateLabel(m_prefix + "Buy_Entry1_Label", startTime, fibo.entry1.price, fibo.entry1.name,
-                  clrGreen, clrWhite);
-   }
-   
-   // Entry 2
-   if(fibo.entry2.show)
-   {
-      CreateLine(m_prefix + "Buy_Entry2", startTime, fibo.entry2.price, endTime, fibo.entry2.price, 
-                 fibo.entry2.lineColor, 1);
-      string labelText = fibo.entry2.name + " (" + DoubleToString(fibo.entry2.price, _Digits) + ")";
-      CreateLabel(m_prefix + "Buy_Entry2_Label", endTime, fibo.entry2.price, labelText,
-                  fibo.entry2.lineColor, clrWhite);
-   }
-   
-   // Entry 3
-   if(fibo.entry3.show)
-   {
-      CreateLine(m_prefix + "Buy_Entry3", startTime, fibo.entry3.price, endTime, fibo.entry3.price, 
-                 fibo.entry3.lineColor, 1);
-      string labelText = fibo.entry3.name + " (" + DoubleToString(fibo.entry3.price, _Digits) + ")";
-      CreateLabel(m_prefix + "Buy_Entry3_Label", endTime, fibo.entry3.price, labelText,
-                  fibo.entry3.lineColor, clrWhite);
-   }
-   
-   // TP1
-   if(fibo.tp1.show)
-   {
-      CreateLine(m_prefix + "Buy_TP1", startTime, fibo.tp1.price, endTime, fibo.tp1.price, 
-                 fibo.tp1.lineColor, 1);
-      string labelText = fibo.tp1.name + " (" + DoubleToString(fibo.tp1.price, _Digits) + ")";
-      CreateLabel(m_prefix + "Buy_TP1_Label", endTime, fibo.tp1.price, labelText,
-                  fibo.tp1.lineColor, clrWhite);
-   }
-   
-   // TP2
-   if(fibo.tp2.show)
-   {
-      CreateLine(m_prefix + "Buy_TP2", startTime, fibo.tp2.price, endTime, fibo.tp2.price, 
-                 fibo.tp2.lineColor, 1);
-      string labelText = fibo.tp2.name + " (" + DoubleToString(fibo.tp2.price, _Digits) + ")";
-      CreateLabel(m_prefix + "Buy_TP2_Label", endTime, fibo.tp2.price, labelText,
-                  fibo.tp2.lineColor, clrWhite);
-   }
-   
-   ChartRedraw(m_chartID);
-   return true;
-}
-
-//+------------------------------------------------------------------+
-//| SELL Fibonacci chizish                                           |
-//+------------------------------------------------------------------+
-bool CChartDrawing::DrawSellFibo(FiboStructure &fibo, int lineBars)
-{
-   if(!fibo.isActive)
-      return false;
-   
-   // Eski SELL Fibo ni o'chirish
-   DeleteSellFibo();
-   
-   datetime startTime = TimeCurrent();
-   datetime endTime = startTime + lineBars * PeriodSeconds(PERIOD_CURRENT);
-   
-   // Entry 1 (asosiy, har doim ko'rsatiladi)
-   if(fibo.entry1.show)
-   {
-      CreateLine(m_prefix + "Sell_Entry1", startTime, fibo.entry1.price, endTime, fibo.entry1.price, 
-                 fibo.entry1.lineColor, 2);
-      CreateLabel(m_prefix + "Sell_Entry1_Label", startTime, fibo.entry1.price, fibo.entry1.name,
-                  clrRed, clrWhite);
-   }
-   
-   // Entry 2
-   if(fibo.entry2.show)
-   {
-      CreateLine(m_prefix + "Sell_Entry2", startTime, fibo.entry2.price, endTime, fibo.entry2.price, 
-                 fibo.entry2.lineColor, 1);
-      string labelText = fibo.entry2.name + " (" + DoubleToString(fibo.entry2.price, _Digits) + ")";
-      CreateLabel(m_prefix + "Sell_Entry2_Label", endTime, fibo.entry2.price, labelText,
-                  fibo.entry2.lineColor, clrWhite);
-   }
-   
-   // Entry 3
-   if(fibo.entry3.show)
-   {
-      CreateLine(m_prefix + "Sell_Entry3", startTime, fibo.entry3.price, endTime, fibo.entry3.price, 
-                 fibo.entry3.lineColor, 1);
-      string labelText = fibo.entry3.name + " (" + DoubleToString(fibo.entry3.price, _Digits) + ")";
-      CreateLabel(m_prefix + "Sell_Entry3_Label", endTime, fibo.entry3.price, labelText,
-                  fibo.entry3.lineColor, clrWhite);
-   }
-   
-   // TP1
-   if(fibo.tp1.show)
-   {
-      CreateLine(m_prefix + "Sell_TP1", startTime, fibo.tp1.price, endTime, fibo.tp1.price, 
-                 fibo.tp1.lineColor, 1);
-      string labelText = fibo.tp1.name + " (" + DoubleToString(fibo.tp1.price, _Digits) + ")";
-      CreateLabel(m_prefix + "Sell_TP1_Label", endTime, fibo.tp1.price, labelText,
-                  fibo.tp1.lineColor, clrWhite);
-   }
-   
-   // TP2
-   if(fibo.tp2.show)
-   {
-      CreateLine(m_prefix + "Sell_TP2", startTime, fibo.tp2.price, endTime, fibo.tp2.price, 
-                 fibo.tp2.lineColor, 1);
-      string labelText = fibo.tp2.name + " (" + DoubleToString(fibo.tp2.price, _Digits) + ")";
-      CreateLabel(m_prefix + "Sell_TP2_Label", endTime, fibo.tp2.price, labelText,
-                  fibo.tp2.lineColor, clrWhite);
-   }
-   
-   ChartRedraw(m_chartID);
-   return true;
-}
-
-//+------------------------------------------------------------------+
-//| Pivot High chizish                                               |
-//+------------------------------------------------------------------+
-bool CChartDrawing::DrawPivotHigh(datetime time, double price)
-{
-   string name = m_prefix + "PH_" + TimeToString(time);
-   
-   if(ObjectCreate(m_chartID, name, OBJ_TEXT, 0, time, price))
-   {
-      ObjectSetString(m_chartID, name, OBJPROP_TEXT, "PH");
-      ObjectSetInteger(m_chartID, name, OBJPROP_COLOR, clrRed);
-      ObjectSetInteger(m_chartID, name, OBJPROP_FONTSIZE, 8);
+      m_symbol = symbol;
+      m_chartID = chartID;
+      m_settings = settings;
+      m_prefix = prefix;
       return true;
    }
-   
-   return false;
-}
 
-//+------------------------------------------------------------------+
-//| Pivot Low chizish                                                |
-//+------------------------------------------------------------------+
-bool CChartDrawing::DrawPivotLow(datetime time, double price)
-{
-   string name = m_prefix + "PL_" + TimeToString(time);
-   
-   if(ObjectCreate(m_chartID, name, OBJ_TEXT, 0, time, price))
+   void Deinit(void) { DeleteAllObjects(); }
+
+   // --- YANGILIKLAR PANELINI CHIZISH ---
+   void DrawNewsPanel(string newsText, bool isFilterActive)
    {
-      ObjectSetString(m_chartID, name, OBJPROP_TEXT, "PL");
-      ObjectSetInteger(m_chartID, name, OBJPROP_COLOR, clrGreen);
-      ObjectSetInteger(m_chartID, name, OBJPROP_FONTSIZE, 8);
-      return true;
-   }
-   
-   return false;
-}
-
-//+------------------------------------------------------------------+
-//| Support chiziq chizish                                           |
-//+------------------------------------------------------------------+
-bool CChartDrawing::DrawSupportLine(datetime time, double price, int length)
-{
-   string name = m_prefix + "Support_" + TimeToString(time);
-   datetime endTime = time + length * PeriodSeconds(PERIOD_CURRENT);
-   
-   return CreateLine(name, time, price, endTime, price, clrGreen, 1);
-}
-
-//+------------------------------------------------------------------+
-//| Resistance chiziq chizish                                        |
-//+------------------------------------------------------------------+
-bool CChartDrawing::DrawResistanceLine(datetime time, double price, int length)
-{
-   string name = m_prefix + "Resistance_" + TimeToString(time);
-   datetime endTime = time + length * PeriodSeconds(PERIOD_CURRENT);
-   
-   return CreateLine(name, time, price, endTime, price, clrRed, 1);
-}
-
-//+------------------------------------------------------------------+
-//| BUY Fibo ni o'chirish                                            |
-//+------------------------------------------------------------------+
-void CChartDrawing::DeleteBuyFibo(void)
-{
-   DeleteObjectsByPrefix(m_prefix + "Buy_");
-}
-
-//+------------------------------------------------------------------+
-//| SELL Fibo ni o'chirish                                           |
-//+------------------------------------------------------------------+
-void CChartDrawing::DeleteSellFibo(void)
-{
-   DeleteObjectsByPrefix(m_prefix + "Sell_");
-}
-
-//+------------------------------------------------------------------+
-//| Barcha obyektlarni o'chirish                                     |
-//+------------------------------------------------------------------+
-void CChartDrawing::DeleteAllObjects(void)
-{
-   DeleteObjectsByPrefix(m_prefix);
-}
-
-//+------------------------------------------------------------------+
-//| Chiziq yaratish                                                  |
-//+------------------------------------------------------------------+
-bool CChartDrawing::CreateLine(string name, datetime time1, double price1, datetime time2, double price2, color clr, int width = 1)
-{
-   if(ObjectCreate(m_chartID, name, OBJ_TREND, 0, time1, price1, time2, price2))
-   {
-      ObjectSetInteger(m_chartID, name, OBJPROP_COLOR, clr);
-      ObjectSetInteger(m_chartID, name, OBJPROP_WIDTH, width);
-      ObjectSetInteger(m_chartID, name, OBJPROP_RAY_RIGHT, false);
-      ObjectSetInteger(m_chartID, name, OBJPROP_BACK, false);
-      return true;
-   }
-   
-   return false;
-}
-
-//+------------------------------------------------------------------+
-//| Label yaratish                                                   |
-//+------------------------------------------------------------------+
-bool CChartDrawing::CreateLabel(string name, datetime time, double price, string text, color bgColor, color textColor, int corner = CORNER_LEFT_UPPER)
-{
-   if(ObjectCreate(m_chartID, name, OBJ_TEXT, 0, time, price))
-   {
-      ObjectSetString(m_chartID, name, OBJPROP_TEXT, text);
-      ObjectSetInteger(m_chartID, name, OBJPROP_COLOR, textColor);
-      ObjectSetInteger(m_chartID, name, OBJPROP_FONTSIZE, GetLabelSize(m_settings.labelSize));
-      ObjectSetInteger(m_chartID, name, OBJPROP_BACK, false);
-      return true;
-   }
-   
-   return false;
-}
-
-//+------------------------------------------------------------------+
-//| Prefiks bo'yicha obyektlarni o'chirish                          |
-//+------------------------------------------------------------------+
-void CChartDrawing::DeleteObjectsByPrefix(string prefix)
-{
-   int total = ObjectsTotal(m_chartID);
-   
-   for(int i = total - 1; i >= 0; i--)
-   {
-      string name = ObjectName(m_chartID, i);
+      string nameHeader = m_prefix + "NewsHeader";
+      string nameBody = m_prefix + "NewsBody";
       
-      if(StringFind(name, prefix) == 0)
-      {
-         ObjectDelete(m_chartID, name);
+      color statusColor = isFilterActive ? clrRed : clrBlue;
+      string statusText = isFilterActive ? "⛔ TRADING STOPPED (NEWS)" : "✅ TRADING ALLOWED";
+
+      // 1. Status (Sarlavha)
+      if(ObjectFind(m_chartID, nameHeader) < 0) ObjectCreate(m_chartID, nameHeader, OBJ_LABEL, 0, 0, 0);
+      ObjectSetInteger(m_chartID, nameHeader, OBJPROP_XDISTANCE, 20); // Chapdan masofa
+      ObjectSetInteger(m_chartID, nameHeader, OBJPROP_YDISTANCE, 200); // Yuqoridan masofa
+      ObjectSetInteger(m_chartID, nameHeader, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+      ObjectSetString(m_chartID, nameHeader, OBJPROP_TEXT, statusText);
+      ObjectSetString(m_chartID, nameHeader, OBJPROP_FONT, "Arial Black");
+      ObjectSetInteger(m_chartID, nameHeader, OBJPROP_FONTSIZE, 10);
+      ObjectSetInteger(m_chartID, nameHeader, OBJPROP_COLOR, statusColor);
+      ObjectSetInteger(m_chartID, nameHeader, OBJPROP_BACK, false);
+
+      // 2. Yangiliklar ro'yxati (Matn)
+      if(ObjectFind(m_chartID, nameBody) < 0) ObjectCreate(m_chartID, nameBody, OBJ_LABEL, 0, 0, 0);
+      ObjectSetInteger(m_chartID, nameBody, OBJPROP_XDISTANCE, 20);
+      ObjectSetInteger(m_chartID, nameBody, OBJPROP_YDISTANCE, 225);
+      ObjectSetInteger(m_chartID, nameBody, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+      ObjectSetString(m_chartID, nameBody, OBJPROP_TEXT, newsText);
+      ObjectSetString(m_chartID, nameBody, OBJPROP_FONT, "Consolas"); // Tekis chiqishi uchun
+      ObjectSetInteger(m_chartID, nameBody, OBJPROP_FONTSIZE, 9);
+      ObjectSetInteger(m_chartID, nameBody, OBJPROP_COLOR, clrBlack);
+      ObjectSetInteger(m_chartID, nameBody, OBJPROP_BACK, false);
+      
+      ChartRedraw(m_chartID);
+   }
+
+   // --- ESKI CHART CHIZISH FUNKSIYALARI ---
+   bool DrawBuyFibo(FiboStructure &fibo, int lineBars)
+   {
+      if(!fibo.isActive) return false;
+      DeleteBuyFibo();
+      datetime t1 = TimeCurrent();
+      datetime t2 = t1 + lineBars * PeriodSeconds(PERIOD_CURRENT);
+      
+      if(fibo.entry1.show) {
+         CreateLine(m_prefix + "Buy_Entry1", t1, fibo.entry1.price, t2, fibo.entry1.price, fibo.entry1.lineColor, 2);
+         CreateLabel(m_prefix + "Buy_Entry1_Lbl", t1, fibo.entry1.price, fibo.entry1.name, clrGreen, clrWhite);
+      }
+      if(fibo.entry2.show) {
+         CreateLine(m_prefix + "Buy_Entry2", t1, fibo.entry2.price, t2, fibo.entry2.price, fibo.entry2.lineColor, 1);
+      }
+      if(fibo.entry3.show) {
+         CreateLine(m_prefix + "Buy_Entry3", t1, fibo.entry3.price, t2, fibo.entry3.price, fibo.entry3.lineColor, 1);
+      }
+      if(fibo.tp1.show) {
+         CreateLine(m_prefix + "Buy_TP1", t1, fibo.tp1.price, t2, fibo.tp1.price, fibo.tp1.lineColor, 1);
+      }
+      if(fibo.tp2.show) {
+         CreateLine(m_prefix + "Buy_TP2", t1, fibo.tp2.price, t2, fibo.tp2.price, fibo.tp2.lineColor, 1);
+      }
+      ChartRedraw(m_chartID);
+      return true;
+   }
+
+   bool DrawSellFibo(FiboStructure &fibo, int lineBars)
+   {
+      if(!fibo.isActive) return false;
+      DeleteSellFibo();
+      datetime t1 = TimeCurrent();
+      datetime t2 = t1 + lineBars * PeriodSeconds(PERIOD_CURRENT);
+      
+      if(fibo.entry1.show) {
+         CreateLine(m_prefix + "Sell_Entry1", t1, fibo.entry1.price, t2, fibo.entry1.price, fibo.entry1.lineColor, 2);
+         CreateLabel(m_prefix + "Sell_Entry1_Lbl", t1, fibo.entry1.price, fibo.entry1.name, clrRed, clrWhite);
+      }
+      if(fibo.entry2.show) {
+         CreateLine(m_prefix + "Sell_Entry2", t1, fibo.entry2.price, t2, fibo.entry2.price, fibo.entry2.lineColor, 1);
+      }
+      if(fibo.entry3.show) {
+         CreateLine(m_prefix + "Sell_Entry3", t1, fibo.entry3.price, t2, fibo.entry3.price, fibo.entry3.lineColor, 1);
+      }
+      if(fibo.tp1.show) {
+         CreateLine(m_prefix + "Sell_TP1", t1, fibo.tp1.price, t2, fibo.tp1.price, fibo.tp1.lineColor, 1);
+      }
+      if(fibo.tp2.show) {
+         CreateLine(m_prefix + "Sell_TP2", t1, fibo.tp2.price, t2, fibo.tp2.price, fibo.tp2.lineColor, 1);
+      }
+      ChartRedraw(m_chartID);
+      return true;
+   }
+
+   void DeleteBuyFibo(void) { DeleteObjectsByPrefix(m_prefix + "Buy_"); }
+   void DeleteSellFibo(void) { DeleteObjectsByPrefix(m_prefix + "Sell_"); }
+   void DeleteAllObjects(void) { DeleteObjectsByPrefix(m_prefix); }
+
+private:
+   bool CreateLine(string name, datetime t1, double p1, datetime t2, double p2, color clr, int w)
+   {
+      if(ObjectCreate(m_chartID, name, OBJ_TREND, 0, t1, p1, t2, p2)) {
+         ObjectSetInteger(m_chartID, name, OBJPROP_COLOR, clr);
+         ObjectSetInteger(m_chartID, name, OBJPROP_WIDTH, w);
+         ObjectSetInteger(m_chartID, name, OBJPROP_RAY_RIGHT, false);
+         return true;
+      }
+      return false;
+   }
+
+   bool CreateLabel(string name, datetime t, double p, string txt, color bg, color txtColor)
+   {
+      if(ObjectCreate(m_chartID, name, OBJ_TEXT, 0, t, p)) {
+         ObjectSetString(m_chartID, name, OBJPROP_TEXT, txt);
+         ObjectSetInteger(m_chartID, name, OBJPROP_COLOR, txtColor);
+         ObjectSetInteger(m_chartID, name, OBJPROP_FONTSIZE, 8);
+         return true;
+      }
+      return false;
+   }
+
+   void DeleteObjectsByPrefix(string prefix)
+   {
+      for(int i = ObjectsTotal(m_chartID) - 1; i >= 0; i--) {
+         string name = ObjectName(m_chartID, i);
+         if(StringFind(name, prefix) == 0) ObjectDelete(m_chartID, name);
       }
    }
-}
-
-//+------------------------------------------------------------------+
+};
