@@ -1,4 +1,4 @@
-﻿//+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
 //|                                                   NewsFilter.mqh |
 //|                               Copyright 2025, Javohir Abdullayev |
 //+------------------------------------------------------------------+
@@ -24,14 +24,14 @@ public:
       m_symbol = symbol;
       m_settings = settings;
       
-      // Valyutalarni avtomatik aniqlash (Masalan: EURUSD -> EUR, USD)
+      // Valyutalarni avtomatik aniqlash
       m_baseCurrency = SymbolInfoString(m_symbol, SYMBOL_CURRENCY_BASE);
       m_quoteCurrency = SymbolInfoString(m_symbol, SYMBOL_CURRENCY_PROFIT);
       
       Print("NewsFilter: Valyutalar - ", m_baseCurrency, " va ", m_quoteCurrency);
    }
 
-   // Asosiy tekshiruv funksiyasi
+   // Asosiy tekshiruv funksiyasi (Savdoni bloklash uchun)
    bool IsNewsTime()
    {
       if(!m_settings.enabled) return false;
@@ -45,6 +45,67 @@ public:
       
       return m_isNewsTime;
    }
+   
+   // --- DASHBOARD UCHUN MA'LUMOT OLISH ---
+   string GetNewsDashboardInfo(bool &isFilterActive)
+   {
+      isFilterActive = m_isNewsTime; // Hozir filtr yoqiqmi?
+      
+      if(!m_settings.enabled) return "News Filter: DISABLED";
+
+      string text = "";
+      MqlCalendarValue values[];
+      datetime serverTime = TimeTradeServer();
+      
+      // Bugungi kun 00:00 dan 23:59 gacha bo'lgan yangiliklarni olamiz
+      datetime dayStart = serverTime - (serverTime % 86400);
+      datetime dayEnd = dayStart + 86400;
+
+      if(CalendarValueHistory(values, dayStart, dayEnd, NULL, NULL))
+      {
+         int total = ArraySize(values);
+         int count = 0;
+         
+         for(int i = 0; i < total; i++)
+         {
+            // O'tib ketgan yangiliklarni ko'rsatmaslik (ixtiyoriy)
+            if(values[i].time < serverTime) continue;
+
+            MqlCalendarEvent event;
+            if(!CalendarEventById(values[i].event_id, event)) continue;
+            
+            MqlCalendarCountry country;
+            if(!CalendarCountryById(event.country_id, country)) continue;
+
+            // Valyuta filtri
+            if(country.currency != m_baseCurrency && country.currency != m_quoteCurrency && country.currency != "USD") 
+               continue;
+
+            // Muhimlik filtri
+            if(event.importance == CALENDAR_IMPORTANCE_HIGH && !m_settings.includeHigh) continue;
+            if(event.importance == CALENDAR_IMPORTANCE_MODERATE && !m_settings.includeMedium) continue;
+            if(event.importance == CALENDAR_IMPORTANCE_LOW && !m_settings.includeLow) continue;
+            if(event.importance == CALENDAR_IMPORTANCE_NONE) continue;
+
+            // Ro'yxatga qo'shish (Maksimum 5 ta kelgusi yangilik)
+            if(count < 5)
+            {
+               string impact = (event.importance == CALENDAR_IMPORTANCE_HIGH) ? "🔴" : (event.importance == CALENDAR_IMPORTANCE_MODERATE) ? "🟠" : "🟢";
+               string timeStr = TimeToString(values[i].time, TIME_MINUTES);
+               
+               // Nomini qisqartirish (uzun bo'lib ketmasligi uchun)
+               string shortName = event.name;
+               if(StringLen(shortName) > 20) shortName = StringSubstr(shortName, 0, 18) + "..";
+               
+               text += StringFormat("%s  %s %s  %s\n", timeStr, country.currency, impact, shortName);
+               count++;
+            }
+         }
+      }
+      
+      if(text == "") text = "No upcoming news today";
+      return text;
+   }
 
 private:
    bool CheckCalendar()
@@ -56,56 +117,35 @@ private:
       datetime timeFrom = serverTime - 4 * 3600;
       datetime timeTo = serverTime + 4 * 3600;
 
-      // 1. Barcha yangiliklarni olamiz
       if(CalendarValueHistory(values, timeFrom, timeTo, NULL, NULL))
       {
          int total = ArraySize(values);
          for(int i = 0; i < total; i++)
          {
-            // 2. Hodisa tafsilotlarini olish (Event ID orqali)
             MqlCalendarEvent event;
-            if(!CalendarEventById(values[i].event_id, event)) 
-               continue;
+            if(!CalendarEventById(values[i].event_id, event)) continue;
             
-            // 3. Mamlakat va Valyutani olish (Country ID orqali)
-            // MqlCalendarEvent ichida currency yo'q, u MqlCalendarCountry da bor
             MqlCalendarCountry country;
-            if(!CalendarCountryById(event.country_id, country))
-               continue;
+            if(!CalendarCountryById(event.country_id, country)) continue;
 
-            // 4. Valyuta mosligini tekshirish
-            // Bizga faqat shu paraga tegishli yoki USD yangiliklari kerak
-            if(country.currency != m_baseCurrency && country.currency != m_quoteCurrency && country.currency != "USD") 
-               continue;
+            if(country.currency != m_baseCurrency && country.currency != m_quoteCurrency && country.currency != "USD") continue;
 
-            // 5. Muhimlik darajasini tekshirish
             if(event.importance == CALENDAR_IMPORTANCE_HIGH && !m_settings.includeHigh) continue;
             if(event.importance == CALENDAR_IMPORTANCE_MODERATE && !m_settings.includeMedium) continue;
             if(event.importance == CALENDAR_IMPORTANCE_LOW && !m_settings.includeLow) continue;
             if(event.importance == CALENDAR_IMPORTANCE_NONE) continue;
 
-            // 6. Vaqt oralig'ini tekshirish
             datetime eventTime = values[i].time;
-            
-            // Yangilikdan oldingi taqiq vaqti (Start)
             datetime blockStart = eventTime - m_settings.beforeMinutes * 60;
-            // Yangilikdan keyingi taqiq vaqti (End)
             datetime blockEnd = eventTime + m_settings.afterMinutes * 60;
 
-            // Agar hozirgi vaqt taqiq oralig'iga tushsa
             if(serverTime >= blockStart && serverTime <= blockEnd)
             {
-               // Print ichida event.name ishlatamiz (MqlCalendarEvent da name bor)
-               // country.currency ishlatamiz (MqlCalendarCountry da currency bor)
-               Print("⛔ NEWS FILTER: Savdo to'xtatildi! Yangilik: ", event.name, 
-                     " | Valyuta: ", country.currency,
-                     " | Vaqt: ", TimeToString(eventTime), 
-                     " | Muhimlik: ", EnumToString(event.importance));
-               return true; // Ha, hozir yangilik vaqti
+               Print("⛔ NEWS FILTER: Savdo to'xtatildi! Yangilik: ", event.name);
+               return true;
             }
          }
       }
-      
-      return false; // Yangilik yo'q
+      return false;
    }
 };
