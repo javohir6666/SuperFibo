@@ -263,20 +263,20 @@ void OnDeinit(const int reason)
 void OnTick()
 {
    if(!g_initSuccess) return;
+
+   // 1. YANGILIKLAR DASHBOARDINI CHIZISH
+   bool isNewsTime = false;
+   string newsInfo = g_news.GetNewsDashboardInfo(isNewsTime); // isNewsTime ichkarida yangilanadi
    
-   // 1. Yangiliklar vaqtini tekshirish
-   // CNewsFilter klassi ichida keshlash bor, shuning uchun har tickda chaqirish xavfsiz
-   bool isNewsTime = g_news.IsNewsTime();
-   
-   // 2. Har tickda pozitsiyalarni boshqarish (Breakeven va Martingale)
+   // Har tickda chizish grafikni qotirmasligi uchun tekshiruv
+   // (Lekin zamonaviy kompyuterda muammo emas)
+   g_chart.DrawNewsPanel(newsInfo, isNewsTime);
+
+   // 2. SAVDO BOSHQARUVI
    if(InpEnableTrading)
    {
       g_trade.ManagePositions();
-      
-      // Martingale (Averaging) monitoring
-      // Eslatma: Agar siz yangilik vaqtida Martingale (usredneniye) ham qilmasligini xohlasangiz,
-      // bu shartlarga "&& !isNewsTime" qo'shishingiz mumkin. 
-      // Lekin odatda ochiq pozitsiyalarni qutqarish uchun bu qism ishlayvergani ma'qul.
+      // Martingale monitoring (yangilik vaqtida ham pozitsiyani qutqarish uchun ishlaydi)
       if(g_buyFiboActive) {
          g_trade.CheckMartingaleEntry2Buy(g_originalBuyFibo);
          g_trade.CheckMartingaleEntry3Buy(g_originalBuyFibo);
@@ -286,16 +286,16 @@ void OnTick()
          g_trade.CheckMartingaleEntry3Sell(g_originalSellFibo);
       }
    }
-   
-   // 3. Yangi bar ochilishini tekshirish (Yangi signallar uchun)
+
+   // 3. YANGI SIGNAL QIDIRISH (Yangi Bar)
    datetime currentBarTime = iTime(_Symbol, _Period, 0);
    if(currentBarTime != g_lastBarTime)
    {
       g_lastBarTime = currentBarTime;
       g_rsi.Update();
       g_pivot.Update();
-      
-      // ════════════════════ BUY SIGNAL ════════════════════
+
+      // --- BUY SIGNAL ---
       if(g_rsi.IsOversoldEntry())
       {
          PivotData lastPivotHigh;
@@ -307,28 +307,21 @@ void OnTick()
                FiboStructure buyFibo;
                if(g_fibo.GetBuyFibo(buyFibo))
                {
-                  // 1. Grafikda chizish (Har doim chizamiz, vizual nazorat uchun)
-                  g_chart.DrawBuyFibo(buyFibo, InpFiboBars);
+                  g_chart.DrawBuyFibo(buyFibo, 15);
                   
-                  // 2. Yangilik vaqtini tekshirish
+                  // YANGILIK FILTRI TEKSHIRUVI
                   if(isNewsTime)
                   {
-                     // Agar yangilik vaqti bo'lsa - Savdo QILMAYMIZ
                      Print("⛔ NEWS FILTER: BUY Signal bekor qilindi (Yangilik vaqti)");
                   }
                   else
                   {
-                     // Yangilik yo'q bo'lsa - Normal rejim
+                     // Signal yuborish va Savdo
+                     if(g_telegram != NULL) g_telegram.SendMessage("🚀 BUY Signal: " + _Symbol);
                      
-                     // Telegram Signal
-                     string msg = "🚀 SuperFibo BUY Signal\nSymbol: " + _Symbol + "\nEntry: " + DoubleToString(buyFibo.entry1.price, _Digits);
-                     g_telegram.SendMessage(msg);
-
-                     // Savdoga kirish
                      if(InpEnableTrading) {
                         if(g_trade.ExecuteBuySetup(buyFibo)) {
-                           g_originalBuyFibo = buyFibo; 
-                           g_buyFiboActive = true;
+                           g_originalBuyFibo = buyFibo; g_buyFiboActive = true;
                         }
                      }
                   }
@@ -336,8 +329,8 @@ void OnTick()
             }
          }
       }
-      
-      // ════════════════════ SELL SIGNAL ════════════════════
+
+      // --- SELL SIGNAL ---
       if(g_rsi.IsOverboughtEntry())
       {
          PivotData lastPivotLow;
@@ -349,28 +342,21 @@ void OnTick()
                FiboStructure sellFibo;
                if(g_fibo.GetSellFibo(sellFibo))
                {
-                  // 1. Grafikda chizish
-                  g_chart.DrawSellFibo(sellFibo, InpFiboBars);
+                  g_chart.DrawSellFibo(sellFibo, 15);
                   
-                  // 2. Yangilik vaqtini tekshirish
+                  // YANGILIK FILTRI TEKSHIRUVI
                   if(isNewsTime)
                   {
-                     // Agar yangilik vaqti bo'lsa - Savdo QILMAYMIZ
                      Print("⛔ NEWS FILTER: SELL Signal bekor qilindi (Yangilik vaqti)");
                   }
                   else
                   {
-                     // Yangilik yo'q bo'lsa - Normal rejim
-
-                     // Telegram Signal
-                     string msg = "📉 SuperFibo SELL Signal\nSymbol: " + _Symbol + "\nEntry: " + DoubleToString(sellFibo.entry1.price, _Digits);
-                     g_telegram.SendMessage(msg);
-
-                     // Savdoga kirish
+                     // Signal yuborish va Savdo
+                     if(g_telegram != NULL) g_telegram.SendMessage("📉 SELL Signal: " + _Symbol);
+                     
                      if(InpEnableTrading) {
                         if(g_trade.ExecuteSellSetup(sellFibo)) {
-                           g_originalSellFibo = sellFibo; 
-                           g_sellFiboActive = true;
+                           g_originalSellFibo = sellFibo; g_sellFiboActive = true;
                         }
                      }
                   }
