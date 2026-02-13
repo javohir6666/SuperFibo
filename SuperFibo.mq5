@@ -16,6 +16,7 @@
 #include "modules/ChartDrawing.mqh"
 #include "modules/TradeManager.mqh"
 #include "modules/TelegramManager.mqh"
+#include "modules/NewsFilter.mqh"
 //+------------------------------------------------------------------+
 //| INPUT PARAMETRLAR                                                |
 //+------------------------------------------------------------------+
@@ -41,6 +42,13 @@ input bool              InpUseMartingale    = false;    // Use Martingale (2x lo
 input group "══════════ Time Filter ══════════"
 input string            InpStartTime        = "03:00";    // Savdo boshlanishi (HH:MM)
 input string            InpEndTime          = "21:00";    // Savdo tugashi (HH:MM)
+
+input group "══════════ News Filter ══════════"
+input bool      InpNewsEnabled      = true;  // Enable News Filter
+input int       InpNewsBefore       = 15;    // Stop Before News (min)
+input int       InpNewsAfter        = 15;    // Start After News (min)
+input bool      InpNewsHigh         = true;  // Filter High Impact
+input bool      InpNewsMedium       = false; // Filter Medium Impact
 
 input group "Static Points Mode"
 sinput string           InpStaticNote       = "Only for Static Points Mode"; // Note
@@ -107,6 +115,7 @@ CFibonacciLevels*       g_fibo              = NULL;
 CChartDrawing*          g_chart             = NULL;
 CTradeManager*          g_trade             = NULL;
 CTelegramManager* g_telegram          = NULL;
+CNewsFilter* g_news              = NULL;
 
 datetime                g_lastBarTime       = 0;
 bool                    g_initSuccess       = false;
@@ -133,13 +142,15 @@ int OnInit()
    g_chart    = new CChartDrawing();
    g_trade    = new CTradeManager();
    g_telegram = new CTelegramManager();
-   
+   g_news     = new CNewsFilter(); // Yangi modul
+
    // Telegram Init
    g_telegram.Init(InpTeleToken, InpTeleChatID, InpTeleEnabled);
    
    // RSI Init
    RSISettings rsiSettings;
-   rsiSettings.period = InpRSIPeriod; rsiSettings.overbought = InpRSIOverbought; rsiSettings.oversold = InpRSIOversold;
+   rsiSettings.period = InpRSIPeriod;
+   rsiSettings.overbought = InpRSIOverbought; rsiSettings.oversold = InpRSIOversold;
    if(!g_rsi.Init(_Symbol, _Period, rsiSettings)) return INIT_FAILED;
    
    // Pivot Init
@@ -147,15 +158,18 @@ int OnInit()
    pivotSettings.leftBars = InpPivotLeft; pivotSettings.rightBars = InpPivotRight;
    pivotSettings.showPivots = InpShowPivots; pivotSettings.showSR = InpShowSR; pivotSettings.srLength = InpSRLength;
    if(!g_pivot.Init(_Symbol, _Period, pivotSettings)) return INIT_FAILED;
-   
+
    // Fibo Init
    FiboSettings fiboSettings;
    fiboSettings.lineBars = InpFiboBars; fiboSettings.entry1Level = InpEntry1Level;
-   fiboSettings.showEntry2 = InpShowEntry2; fiboSettings.entry2Level = InpEntry2Level; fiboSettings.entry2Color = InpEntry2Color;
+   fiboSettings.showEntry2 = InpShowEntry2; fiboSettings.entry2Level = InpEntry2Level;
+   fiboSettings.entry2Color = InpEntry2Color;
    fiboSettings.showEntry3 = InpShowEntry3; fiboSettings.entry3Level = InpEntry3Level; fiboSettings.entry3Color = InpEntry3Color;
-   fiboSettings.showSL = InpShowSL; fiboSettings.slLevel = InpSLLevel; fiboSettings.slColor = InpSLColor;
+   fiboSettings.showSL = InpShowSL; fiboSettings.slLevel = InpSLLevel;
+   fiboSettings.slColor = InpSLColor;
    fiboSettings.showTP1 = InpShowTP1; fiboSettings.tp1Level = InpTP1Level; fiboSettings.tp1Color = InpTP1Color;
-   fiboSettings.showTP2 = InpShowTP2; fiboSettings.tp2Level = InpTP2Level; fiboSettings.tp2Color = InpTP2Color;
+   fiboSettings.showTP2 = InpShowTP2; fiboSettings.tp2Level = InpTP2Level;
+   fiboSettings.tp2Color = InpTP2Color;
    if(!g_fibo.Init(_Symbol, _Period, fiboSettings)) return INIT_FAILED;
 
    // Drawing Init
@@ -169,36 +183,43 @@ int OnInit()
    tradeSettings.slippage = InpSlippage;
    tradeSettings.magic = InpMagic;
    tradeSettings.comment = InpComment;
-   tradeSettings.tradeMode = InpTradeMode;
+   
+   // --- TUZATILGAN QISM ---
+   // Input int ni ENUM_TRADE_MODE ga majburiy o'tkazish (casting)
+   tradeSettings.tradeMode = (ENUM_TRADE_MODE)InpTradeMode; 
+   // -----------------------
+   
    tradeSettings.useBreakeven = InpUseBreakeven;
    tradeSettings.useMartingale = InpUseMartingale;
    tradeSettings.slPoints = InpSLPoints;
    tradeSettings.tp1Points = InpTP1Points;
    tradeSettings.tp2Points = InpTP2Points;
-   // VAQT FILTRINI PASS QILISH
-   tradeSettings.startTime        = InpStartTime;
-   tradeSettings.endTime          = InpEndTime;
-   // Telegram
-   tradeSettings.telegram.enabled = InpTeleEnabled; // Telegram holati
-   tradeSettings.telegram.token   = InpTeleToken;
-   tradeSettings.telegram.chatID  = InpTeleChatID;
+   tradeSettings.startTime = InpStartTime;
+   tradeSettings.endTime = InpEndTime;
+   tradeSettings.telegram.enabled = InpTeleEnabled;
+   tradeSettings.telegram.token = InpTeleToken;
+   tradeSettings.telegram.chatID = InpTeleChatID;
    
+   // News Settings to'ldirish (Agar struct Settings.mqh da bo'lsa)
+   tradeSettings.news.enabled = InpNewsEnabled;
+   tradeSettings.news.beforeMinutes = InpNewsBefore;
+   tradeSettings.news.afterMinutes = InpNewsAfter;
+   tradeSettings.news.includeHigh = InpNewsHigh;
+   tradeSettings.news.includeMedium = InpNewsMedium;
+   tradeSettings.news.includeLow = false;
+   
+   // News Filter Init
+   g_news.Init(_Symbol, tradeSettings.news);
+
    if(!g_trade.Init(_Symbol, tradeSettings)) return INIT_FAILED;
    
    g_initSuccess = true;
    g_lastBarTime = iTime(_Symbol, _Period, 0);
    
-   // ROBOT ISHGA TUSHGANI HAQIDA HABAR
-   string startMsg = "🚀 SuperFibo EA ishga tushdi!\n" + 
-                     "Symbol: " + _Symbol + "\n" + 
-                     "Period: " + EnumToString(_Period) + "\n" +
-                     "Trading: " + (InpEnableTrading ? "ENABLED" : "DISABLED");
+   // Start Message
+   string startMsg = "🚀 SuperFibo EA ishga tushdi!\nSymbol: " + _Symbol;
    g_telegram.SendMessage(startMsg);
 
-   Print("═══════════════════════════════════════════════════");
-   Print("  SuperFibo EA Initialized Successfully!");
-   Print("═══════════════════════════════════════════════════");
-   
    return INIT_SUCCEEDED;
 }
 
@@ -232,7 +253,7 @@ void OnDeinit(const int reason)
    }
    
    if(g_trade != NULL) { delete g_trade; g_trade = NULL; }
-   
+   if(g_news != NULL) { delete g_news; g_news = NULL; }
    Print("SuperFibo EA Deinitialized.");
 }
 
@@ -243,12 +264,19 @@ void OnTick()
 {
    if(!g_initSuccess) return;
    
-   // Har tickda pozitsiyalarni boshqarish (Breakeven monitoring)
+   // 1. Yangiliklar vaqtini tekshirish
+   // CNewsFilter klassi ichida keshlash bor, shuning uchun har tickda chaqirish xavfsiz
+   bool isNewsTime = g_news.IsNewsTime();
+   
+   // 2. Har tickda pozitsiyalarni boshqarish (Breakeven va Martingale)
    if(InpEnableTrading)
    {
       g_trade.ManagePositions();
       
-      // Martingale monitoring
+      // Martingale (Averaging) monitoring
+      // Eslatma: Agar siz yangilik vaqtida Martingale (usredneniye) ham qilmasligini xohlasangiz,
+      // bu shartlarga "&& !isNewsTime" qo'shishingiz mumkin. 
+      // Lekin odatda ochiq pozitsiyalarni qutqarish uchun bu qism ishlayvergani ma'qul.
       if(g_buyFiboActive) {
          g_trade.CheckMartingaleEntry2Buy(g_originalBuyFibo);
          g_trade.CheckMartingaleEntry3Buy(g_originalBuyFibo);
@@ -259,6 +287,7 @@ void OnTick()
       }
    }
    
+   // 3. Yangi bar ochilishini tekshirish (Yangi signallar uchun)
    datetime currentBarTime = iTime(_Symbol, _Period, 0);
    if(currentBarTime != g_lastBarTime)
    {
@@ -266,7 +295,7 @@ void OnTick()
       g_rsi.Update();
       g_pivot.Update();
       
-      // BUY SIGNAL
+      // ════════════════════ BUY SIGNAL ════════════════════
       if(g_rsi.IsOversoldEntry())
       {
          PivotData lastPivotHigh;
@@ -278,15 +307,29 @@ void OnTick()
                FiboStructure buyFibo;
                if(g_fibo.GetBuyFibo(buyFibo))
                {
+                  // 1. Grafikda chizish (Har doim chizamiz, vizual nazorat uchun)
                   g_chart.DrawBuyFibo(buyFibo, InpFiboBars);
                   
-                  // Telegram Signal
-                  string msg = "🚀 SuperFibo BUY Signal\nSymbol: " + _Symbol + "\nEntry: " + DoubleToString(buyFibo.entry1.price, _Digits);
-                  g_telegram.SendMessage(msg);
+                  // 2. Yangilik vaqtini tekshirish
+                  if(isNewsTime)
+                  {
+                     // Agar yangilik vaqti bo'lsa - Savdo QILMAYMIZ
+                     Print("⛔ NEWS FILTER: BUY Signal bekor qilindi (Yangilik vaqti)");
+                  }
+                  else
+                  {
+                     // Yangilik yo'q bo'lsa - Normal rejim
+                     
+                     // Telegram Signal
+                     string msg = "🚀 SuperFibo BUY Signal\nSymbol: " + _Symbol + "\nEntry: " + DoubleToString(buyFibo.entry1.price, _Digits);
+                     g_telegram.SendMessage(msg);
 
-                  if(InpEnableTrading) {
-                     if(g_trade.ExecuteBuySetup(buyFibo)) {
-                        g_originalBuyFibo = buyFibo; g_buyFiboActive = true;
+                     // Savdoga kirish
+                     if(InpEnableTrading) {
+                        if(g_trade.ExecuteBuySetup(buyFibo)) {
+                           g_originalBuyFibo = buyFibo; 
+                           g_buyFiboActive = true;
+                        }
                      }
                   }
                }
@@ -294,7 +337,7 @@ void OnTick()
          }
       }
       
-      // SELL SIGNAL
+      // ════════════════════ SELL SIGNAL ════════════════════
       if(g_rsi.IsOverboughtEntry())
       {
          PivotData lastPivotLow;
@@ -306,15 +349,29 @@ void OnTick()
                FiboStructure sellFibo;
                if(g_fibo.GetSellFibo(sellFibo))
                {
+                  // 1. Grafikda chizish
                   g_chart.DrawSellFibo(sellFibo, InpFiboBars);
                   
-                  // Telegram Signal
-                  string msg = "📉 SuperFibo SELL Signal\nSymbol: " + _Symbol + "\nEntry: " + DoubleToString(sellFibo.entry1.price, _Digits);
-                  g_telegram.SendMessage(msg);
+                  // 2. Yangilik vaqtini tekshirish
+                  if(isNewsTime)
+                  {
+                     // Agar yangilik vaqti bo'lsa - Savdo QILMAYMIZ
+                     Print("⛔ NEWS FILTER: SELL Signal bekor qilindi (Yangilik vaqti)");
+                  }
+                  else
+                  {
+                     // Yangilik yo'q bo'lsa - Normal rejim
 
-                  if(InpEnableTrading) {
-                     if(g_trade.ExecuteSellSetup(sellFibo)) {
-                        g_originalSellFibo = sellFibo; g_sellFiboActive = true;
+                     // Telegram Signal
+                     string msg = "📉 SuperFibo SELL Signal\nSymbol: " + _Symbol + "\nEntry: " + DoubleToString(sellFibo.entry1.price, _Digits);
+                     g_telegram.SendMessage(msg);
+
+                     // Savdoga kirish
+                     if(InpEnableTrading) {
+                        if(g_trade.ExecuteSellSetup(sellFibo)) {
+                           g_originalSellFibo = sellFibo; 
+                           g_sellFiboActive = true;
+                        }
                      }
                   }
                }
