@@ -1,4 +1,4 @@
-﻿//+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
 //|                                                 TradeManager.mqh |
 //|                               Copyright 2025, Javohir Abdullayev |
 //|                                               https://pycoder.uz |
@@ -34,6 +34,8 @@ struct TradeSettings
    // VAQT FILTRI UCHUN YANGI QATORLAR
    string   startTime;      // "HH:MM" formatida
    string   endTime;        // "HH:MM" formatida
+   
+   double   dailyLossPercent; // Kunlik zarar limiti (%)
 };
 
 class CTradeManager
@@ -43,6 +45,7 @@ private:
    string         m_symbol;
    TradeSettings  m_settings;
    
+   // Savdo holati o'zgaruvchilari
    long           m_currentBuySignalID;
    long           m_currentSellSignalID;
    int            m_currentBuyEntry;
@@ -50,34 +53,41 @@ private:
    double         m_buyPivotPrice;
    double         m_sellPivotPrice;
    
+   // --- YANGI: KUNLIK ZARAR UCHUN O'ZGARUVCHILAR ---
+   bool           m_isDailyStopActive; // Bugun savdo to'xtatilganmi?
+   int            m_lastDayOfYear;     // Kun o'zgarganini aniqlash uchun
+   
+   // Yordamchi funksiyalar
    double         NormalizePrice(double price);
    double         CalculateSL(ENUM_ORDER_TYPE type, double entryPrice, FiboStructure &fibo);
    double         CalculateTP(ENUM_ORDER_TYPE type, double entryPrice, double fiboTP, int tpNum);
-   
-   bool           OpenPosition(ENUM_ORDER_TYPE type, double entry, double sl, double tp, 
-                              string comment, double lot);
+   bool           OpenPosition(ENUM_ORDER_TYPE type, double entry, double sl, double tp, string comment, double lot);
    bool           HasOpenOrders(long signalID, bool isBuy, int entryNum);
    void           CheckBreakevenForSignal(bool isBuy, long signalID);
-   bool IsTradingTime();
+   bool           IsTradingTime();
+   
+   // --- YANGI: RISK FUNKSIYALARI ---
+   void           CheckDailyLossLimit();   // Kunlik zararni tekshirish
+   double         GetDailyTotalProfit();   // Kunlik foyda/zararni hisoblash
+   void           CloseAllPositions();     // Hamma pozitsiyalarni yopish
+
 public:
-                  CTradeManager();
-                 ~CTradeManager();
+   CTradeManager();
+   ~CTradeManager();
    
    bool           Init(string symbol, TradeSettings &settings);
-   
    bool           ExecuteBuySetup(FiboStructure &fibo);
    bool           ExecuteSellSetup(FiboStructure &fibo);
    
+   // Martingale funksiyalari (eski kodlar)
    void           CheckMartingaleEntry2Buy(FiboStructure &originalFibo);
    void           CheckMartingaleEntry3Buy(FiboStructure &originalFibo);
    void           CheckMartingaleEntry2Sell(FiboStructure &originalFibo);
    void           CheckMartingaleEntry3Sell(FiboStructure &originalFibo);
-   
    void           UpdateTPAfterMartingale(bool isBuy, long signalID, double newPivot, double newEntry, FiboStructure &originalFibo);
    
-   void           ManagePositions();
+   void           ManagePositions(); // Asosiy boshqaruv funksiyasi
 };
-
 CTradeManager::CTradeManager()
 {
    m_currentBuySignalID = 0;
@@ -86,6 +96,9 @@ CTradeManager::CTradeManager()
    m_currentSellEntry = 0;
    m_buyPivotPrice = 0;
    m_sellPivotPrice = 0;
+   
+   m_isDailyStopActive = false;
+   m_lastDayOfYear = -1;
 }
 
 CTradeManager::~CTradeManager()
@@ -101,20 +114,147 @@ bool CTradeManager::Init(string symbol, TradeSettings &settings)
    m_trade.SetDeviationInPoints(m_settings.slippage);
    
    ENUM_SYMBOL_TRADE_EXECUTION exec_mode = (ENUM_SYMBOL_TRADE_EXECUTION)SymbolInfoInteger(m_symbol, SYMBOL_TRADE_EXEMODE);
-   
    if(exec_mode == SYMBOL_TRADE_EXECUTION_EXCHANGE)
-   {
       m_trade.SetTypeFilling(ORDER_FILLING_RETURN);
-   }
    else
-   {
       m_trade.SetTypeFilling(ORDER_FILLING_FOK);
-   }
    
    m_trade.SetAsyncMode(false);
    
+   // Kunlik hisoblagichni reset qilish
+   m_isDailyStopActive = false;
+   MqlDateTime dt;
+   TimeCurrent(dt);
+   m_lastDayOfYear = dt.day_of_year;
+   
    Print("TradeManager initialized: ", m_symbol);
    return true;
+}
+
+void CTradeManager::ManagePositions()
+{
+   // 1. KUNLIK ZARARNI TEKSHIRISH
+   CheckDailyLossLimit();
+
+   // Agar limitga yetgan bo'lsa, hech narsa qilmaymiz
+   if(m_isDailyStopActive || !m_settings.enableTrading) return;
+
+   // 2. BREAKEVEN (ZARARSIZLANTIRISH)
+   if(m_settings.useBreakeven)
+   {
+      CheckBreakevenForSignal(true, m_currentBuySignalID);
+      CheckBreakevenForSignal(false, m_currentSellSignalID);
+   }
+}
+
+double CTradeManager::GetDailyTotalProfit()
+{
+   // Kun boshlanish vaqti (00:00 server vaqti)
+   datetime startOfDay = iTime(m_symbol, PERIOD_D1, 0);
+   datetime now = TimeCurrent();
+   
+   double totalProfit = 0.0;
+
+   // 1. Yopilgan orderlar (History)
+   if(HistorySelect(startOfDay, now))
+   {
+      int deals = HistoryDealsTotal();
+      for(int i = 0; i < deals; i++)
+      {
+         ulong ticket = HistoryDealGetTicket(i);
+         // Faqat shu ekspertning va shu paraning orderlari
+         if(HistoryDealGetInteger(ticket, DEAL_MAGIC) == m_settings.magic &&
+            HistoryDealGetString(ticket, DEAL_SYMBOL) == m_symbol)
+         {
+            double profit = HistoryDealGetDouble(ticket, DEAL_PROFIT);
+            double swap = HistoryDealGetDouble(ticket, DEAL_SWAP);
+            double comm = HistoryDealGetDouble(ticket, DEAL_COMMISSION);
+            totalProfit += (profit + swap + comm);
+         }
+      }
+   }
+
+   // 2. Ochiq pozitsiyalar (Floating)
+   for(int i = 0; i < PositionsTotal(); i++)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(PositionGetInteger(POSITION_MAGIC) == m_settings.magic &&
+         PositionGetString(POSITION_SYMBOL) == m_symbol)
+      {
+         double profit = PositionGetDouble(POSITION_PROFIT);
+         double swap = PositionGetDouble(POSITION_SWAP);
+         // Komissiya odatda pozitsiya yopilganda olinadi, lekin hisobga olish yaxshi
+         totalProfit += (profit + swap);
+      }
+   }
+   
+   return totalProfit;
+}
+
+void CTradeManager::CheckDailyLossLimit()
+{
+   // 1. Kun yangilanganini tekshirish
+   MqlDateTime dt;
+   TimeCurrent(dt);
+   if(dt.day_of_year != m_lastDayOfYear)
+   {
+      m_isDailyStopActive = false; // Yangi kun, blokirovkani ochamiz
+      m_lastDayOfYear = dt.day_of_year;
+      Print("Yangi kun boshlandi. Daily Loss reset qilindi.");
+   }
+
+   // Agar allaqachon bloklangan bo'lsa yoki funksiya o'chirilgan bo'lsa, qaytamiz
+   if(m_isDailyStopActive || m_settings.dailyLossPercent <= 0) return;
+
+   // 2. Limitni hisoblash
+   double currentProfit = GetDailyTotalProfit();
+   double currentBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+   
+   // Kun boshidagi balansni taxminiy topish: Hozirgi Balans - Bugungi Yopilgan Foyda
+   // (Eslatma: Bu yerda depozit/yechish hisobga olinmagan deb faraz qilinadi, aniqroq bo'lishi uchun)
+   // Lekin oddiy yondashuv: "Kun boshidagi balans" = CurrentBalance - ClosedProfitToday
+   // Yoki oddiygina: Hozirgi balansga nisbatan %
+   
+   // Foydalanuvchi "Balansdan kelib chiqib" degani uchun, eng to'g'risi:
+   // StartBalance = CurrentBalance - ClosedProfit (faqat yopilganlar)
+   
+   double closedProfitToday = 0;
+   datetime startOfDay = iTime(m_symbol, PERIOD_D1, 0);
+   if(HistorySelect(startOfDay, TimeCurrent())) {
+       for(int i=0; i<HistoryDealsTotal(); i++) {
+           ulong t = HistoryDealGetTicket(i);
+           if(HistoryDealGetInteger(t, DEAL_MAGIC) == m_settings.magic && HistoryDealGetString(t, DEAL_SYMBOL) == m_symbol)
+               closedProfitToday += HistoryDealGetDouble(t, DEAL_PROFIT) + HistoryDealGetDouble(t, DEAL_SWAP) + HistoryDealGetDouble(t, DEAL_COMMISSION);
+       }
+   }
+   
+   double startDayBalance = currentBalance - closedProfitToday;
+   double maxLossAmount = startDayBalance * (m_settings.dailyLossPercent / 100.0);
+
+   // 3. Tekshirish: Agar (CurrentProfit <= -MaxLoss)
+   if(currentProfit <= -maxLossAmount)
+   {
+      Print("⛔ KUNLIK ZARAR LIMITI YETDI! Limit: ", maxLossAmount, " Profit: ", currentProfit);
+      Print("Barcha pozitsiyalar yopilmoqda va savdo to'xtatilmoqda.");
+      
+      CloseAllPositions();
+      m_isDailyStopActive = true;
+      
+      // Telegramga xabar (agar ulangan bo'lsa - bu yerda oddiy Print, TelegramManagerga signal berish kerak bo'ladi tashqaridan)
+   }
+}
+
+void CTradeManager::CloseAllPositions()
+{
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(PositionGetInteger(POSITION_MAGIC) == m_settings.magic &&
+         PositionGetString(POSITION_SYMBOL) == m_symbol)
+      {
+         m_trade.PositionClose(ticket);
+      }
+   }
 }
 
 double CTradeManager::NormalizePrice(double price)
@@ -205,9 +345,13 @@ bool CTradeManager::HasOpenOrders(long signalID, bool isBuy, int entryNum)
 
 bool CTradeManager::ExecuteBuySetup(FiboStructure &fibo)
 {
+   // Daily Stop tekshiruvi qo'shildi
+   if(m_isDailyStopActive) return false;
+   
    if(!m_settings.enableTrading || !fibo.isActive || !IsTradingTime())
       return false;
-   
+      
+   // ... (Qolgan kod o'zgarishsiz)
    m_currentBuySignalID = TimeCurrent();
    m_currentBuyEntry = 1;
    m_buyPivotPrice = fibo.level0;
@@ -218,33 +362,30 @@ bool CTradeManager::ExecuteBuySetup(FiboStructure &fibo)
    double sl = CalculateSL(ORDER_TYPE_BUY, entry1, fibo);
    
    bool success = false;
-   
    if(fibo.tp1.show)
    {
       double tp1 = CalculateTP(ORDER_TYPE_BUY, entry1, fibo.tp1.price, 1);
       string comment = "SF-BUY-" + IntegerToString(m_currentBuySignalID) + "-E1-TP1";
-      
-      if(OpenPosition(ORDER_TYPE_BUY, entry1, sl, tp1, comment, m_settings.lotSize))
-         success = true;
+      if(OpenPosition(ORDER_TYPE_BUY, entry1, sl, tp1, comment, m_settings.lotSize)) success = true;
    }
-   
    if(fibo.tp2.show)
    {
       double tp2 = CalculateTP(ORDER_TYPE_BUY, entry1, fibo.tp2.price, 2);
       string comment = "SF-BUY-" + IntegerToString(m_currentBuySignalID) + "-E1-TP2";
-      
-      if(OpenPosition(ORDER_TYPE_BUY, entry1, sl, tp2, comment, m_settings.lotSize))
-         success = true;
+      if(OpenPosition(ORDER_TYPE_BUY, entry1, sl, tp2, comment, m_settings.lotSize)) success = true;
    }
-   
    return success;
 }
 
 bool CTradeManager::ExecuteSellSetup(FiboStructure &fibo)
 {
+   // Daily Stop tekshiruvi qo'shildi
+   if(m_isDailyStopActive) return false;
+
    if(!m_settings.enableTrading || !fibo.isActive || !IsTradingTime())
       return false;
-   
+      
+   // ... (Qolgan kod o'zgarishsiz)
    m_currentSellSignalID = TimeCurrent();
    m_currentSellEntry = 1;
    m_sellPivotPrice = fibo.level0;
@@ -255,25 +396,18 @@ bool CTradeManager::ExecuteSellSetup(FiboStructure &fibo)
    double sl = CalculateSL(ORDER_TYPE_SELL, entry1, fibo);
    
    bool success = false;
-   
    if(fibo.tp1.show)
    {
       double tp1 = CalculateTP(ORDER_TYPE_SELL, entry1, fibo.tp1.price, 1);
       string comment = "SF-SELL-" + IntegerToString(m_currentSellSignalID) + "-E1-TP1";
-      
-      if(OpenPosition(ORDER_TYPE_SELL, entry1, sl, tp1, comment, m_settings.lotSize))
-         success = true;
+      if(OpenPosition(ORDER_TYPE_SELL, entry1, sl, tp1, comment, m_settings.lotSize)) success = true;
    }
-   
    if(fibo.tp2.show)
    {
       double tp2 = CalculateTP(ORDER_TYPE_SELL, entry1, fibo.tp2.price, 2);
       string comment = "SF-SELL-" + IntegerToString(m_currentSellSignalID) + "-E1-TP2";
-      
-      if(OpenPosition(ORDER_TYPE_SELL, entry1, sl, tp2, comment, m_settings.lotSize))
-         success = true;
+      if(OpenPosition(ORDER_TYPE_SELL, entry1, sl, tp2, comment, m_settings.lotSize)) success = true;
    }
-   
    return success;
 }
 
@@ -534,15 +668,6 @@ void CTradeManager::CheckMartingaleEntry3Sell(FiboStructure &originalFibo)
       // TP ni yangilash - Entry1, Entry2 va Entry3 uchun bir xil TP
       UpdateTPAfterMartingale(false, m_currentSellSignalID, newLevel0, newLevel1, originalFibo);
    }
-}
-
-void CTradeManager::ManagePositions()
-{
-   if(!m_settings.enableTrading || !m_settings.useBreakeven) return;
-
-   // Buy va Sell signallari uchun alohida tekshiramiz
-   CheckBreakevenForSignal(true, m_currentBuySignalID);
-   CheckBreakevenForSignal(false, m_currentSellSignalID);
 }
 
 void CTradeManager::CheckBreakevenForSignal(bool isBuy, long signalID)
